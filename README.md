@@ -25,6 +25,7 @@ iPhone anschließen → **„WDID aktualisieren.command“ doppelklicken**. Das 
 
 ## Wenn etwas hakt
 
+- *Xcode zeigt „Missing package product 'CapApp-SPM'“*: Xcode schließen, im Ordner `npm install && npx cap sync ios` ausführen, dann *File → Packages → Resolve Package Versions*. Das Skript erledigt das automatisch.
 - *„Kein iPhone gefunden“*: Kabel prüfen, iPhone entsperren, Vertrauen bestätigen.
 - *Bundle-ID schon vergeben*: eine andere in die Datei `.wdid-bundle` schreiben, z. B. `de.deinname.wdid`.
 - *Falsches Team*: Datei `.wdid-team` löschen, dann erkennt das Skript das Team neu.
