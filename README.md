@@ -17,6 +17,24 @@ Aufbau: Die Oberfläche ist eine einzige Datei (`www/index.html`, Vanilla JS). C
 6. Im Finder den Ordner `WDID` öffnen und **„WDID aktualisieren.command“ doppelklicken**. Beim ersten Mal fragt macOS evtl. nach Erlaubnis (Rechtsklick → Öffnen) und der Schlüsselbund nach deinem Mac-Passwort („Immer erlauben“).
 7. Beim ersten Start auf dem iPhone: *Einstellungen → Allgemein → VPN & Geräteverwaltung →* deine Apple-ID → *Vertrauen*.
 
+## Was WDID kann
+
+- **Heute:** alles für den Tag in der richtigen Reihenfolge, Liegengebliebenes oben, Fristen mit Vorlauf, Nachhaken, Ortslisten. „Tag kopieren“ kopiert alles als Text.
+- **Schnelleingabe** (oben im Plus-Fenster): „Fr 14 Uhr Friseur“, „bis 15.11. Antrag abgeben“, „bei Kaufland: Milch, Brot“, „jeden Montag Müll rausbringen #arbeit“.
+- **Papiere:** Brief scannen (Texterkennung auf dem iPhone, erkennt Absender, Aktenzeichen, Betrag und Frist), Fristrechner mit Zugangsfiktion, Wochenenden und Feiertagen deines Bundeslands, Vorgänge mit Zeitleiste und Fotos, Kündigungswecker für Verträge, Dokumente mit Ablaufdatum, „Wartet auf“ mit Nachhaken, Nachweis („erledigt per Einschreiben“).
+- **Orte:** Listen für einen Laden, für „jeden Supermarkt“ oder für Personen („Wenn du Mama siehst“). Einkaufslisten sind nach Abteilungen sortiert, WDID lernt deinen Weg durch den Laden und schlägt Dinge vor, die du regelmäßig kaufst. Mit Standort „Immer“ meldet sich WDID bei Ankunft, auch wenn die App zu ist.
+- **Verlauf:** alles Erledigte mit Uhrzeit und Ort, durchsuchbar, Wochenrückblick, Tagesrückblick mit „auf morgen schieben“.
+- **Mitteilungen:** Morgen-Briefing und Tagesabschluss (Uhrzeit in den Einstellungen), Erinnerungen, Fristen, Kündigungstermine.
+- **Einstellungen** (Zahnrad unter „Alles“): Bundesland, Briefing-Zeiten, Arbeit nach Feierabend ausblenden, Face-ID-Sperre, verschlüsseltes Backup in die Dateien-App und zurück.
+
+### Action-Button
+
+Kurzbefehle-App → neuer Kurzbefehl → Aktion „URL öffnen“ → `wdid://neu` (neuer Eintrag mit Schnelleingabe) oder `wdid://scan` (Brief scannen). Dann *Einstellungen → Action-Button → Kurzbefehl* und den neuen Kurzbefehl wählen.
+
+### Berechtigungen
+
+Beim ersten Mal fragt iOS nach Mitteilungen, Standort (für Ankunft: „Immer erlauben“), Kamera (Brief scannen) und Face ID. Alles bleibt auf dem iPhone.
+
 ## Jede Woche
 
 WDID legt am Samstag vor Ablauf der Signatur automatisch den Eintrag „iPhone an den Mac anschließen“ an und erinnert dich um 10 Uhr. Dann:

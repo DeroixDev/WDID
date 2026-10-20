@@ -24,7 +24,7 @@ Jeder Eintrag: Titel, Details, Bereich (Privat/Arbeit).
 ## Nächste Ausbaustufen
 1. Foto vom Brief anhängen, Frist und Absender automatisch auslesen (OCR).
 2. Push-Benachrichtigungen zur Uhrzeit und X Tage vor Fristen.
-3. Schnelleingabe in einer Zeile: „morgen 9 Zahnarzt anrufen“.
+3. Schnelleingabe in einer Zeile: „morgen 9 Friseur anrufen“.
 4. Wiederkehrende Einkaufsartikel als Vorschläge.
 5. Sync über mehrere Geräte (Konto + Backend).
 

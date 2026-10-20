@@ -62,6 +62,23 @@
 	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>WDID nutzt deinen Standort, um Orte wie deinen Supermarkt zu speichern und zu erkennen, wann du dort bist. Der Standort verlässt dein iPhone nicht.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>WDID meldet sich, wenn du an einem gespeicherten Ort wie deinem Supermarkt ankommst, auch wenn die App geschlossen ist. Der Standort verlässt dein iPhone nicht.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>WDID fotografiert Briefe und Belege, um Fristen und Aktenzeichen zu erkennen. Die Fotos bleiben auf deinem iPhone.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>WDID schützt deine Briefe, Verträge und Dokumente mit Face ID.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>de.deroix.wdid</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>wdid</string>
+			</array>
+		</dict>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>UIViewControllerBasedStatusBarAppearance</key>

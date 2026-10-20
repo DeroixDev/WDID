@@ -5,7 +5,8 @@ import Capacitor
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // Ankunftserkennung muss auch dann bereitstehen, wenn iOS die App im Hintergrund startet
+        _ = GeofenceManager.shared
         return true
     }
 
