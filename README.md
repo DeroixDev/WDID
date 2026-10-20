@@ -11,10 +11,11 @@ Aufbau: Die Oberfläche ist eine einzige Datei (`www/index.html`, Vanilla JS). C
 3. **Apple-ID in Xcode:** Xcode → Einstellungen → Accounts → „+“ → Apple-ID. Dann den Account auswählen → *Manage Certificates* → „+“ → *Apple Development*.
 4. **Repo holen:** Terminal öffnen und eingeben:
    ```
-   cd ~ && git clone https://github.com/DeroixDev/WDID.git
+   mkdir -p ~/Developer && cd ~/Developer && git clone https://github.com/DeroixDev/WDID.git
    ```
 5. **iPhone vorbereiten:** per Kabel anschließen, entsperren, „Diesem Computer vertrauen“ tippen. Danach auf dem iPhone *Einstellungen → Datenschutz & Sicherheit → Entwicklermodus* einschalten (iPhone startet neu).
-6. Im Finder den Ordner `WDID` öffnen und **„WDID aktualisieren.command“ doppelklicken**. Beim ersten Mal fragt macOS evtl. nach Erlaubnis (Rechtsklick → Öffnen) und der Schlüsselbund nach deinem Mac-Passwort („Immer erlauben“).
+   Wichtig: nicht nach Schreibtisch oder Dokumente, wenn dort iCloud synchronisiert. iCloud legt sonst Kopien wie `Datei 2.swift` an und der Build bricht ab.
+6. Im Finder den Ordner `~/Developer/WDID` öffnen und **„WDID aktualisieren.command“ doppelklicken**. Beim ersten Mal fragt macOS evtl. nach Erlaubnis (Rechtsklick → Öffnen) und der Schlüsselbund nach deinem Mac-Passwort („Immer erlauben“).
 7. Beim ersten Start auf dem iPhone: *Einstellungen → Allgemein → VPN & Geräteverwaltung →* deine Apple-ID → *Vertrauen*.
 
 ## Was WDID kann
@@ -43,6 +44,7 @@ iPhone anschließen → **„WDID aktualisieren.command“ doppelklicken**. Das 
 
 ## Wenn etwas hakt
 
+- *„Invalid redeclaration“ oder Dateien mit „ 2“ im Namen*: Der Ordner liegt in iCloud. Frisch nach `~/Developer` klonen, `npm ci`, in Xcode *Clean Build Folder* und *Reset Package Caches*.
 - *Xcode zeigt „Missing package product 'CapApp-SPM'“*: Xcode schließen, im Ordner `npm install && npx cap sync ios` ausführen, dann *File → Packages → Resolve Package Versions*. Das Skript erledigt das automatisch.
 - *„Kein iPhone gefunden“*: Kabel prüfen, iPhone entsperren, Vertrauen bestätigen.
 - *Bundle-ID schon vergeben*: eine andere in die Datei `.wdid-bundle` schreiben, z. B. `de.deinname.wdid`.

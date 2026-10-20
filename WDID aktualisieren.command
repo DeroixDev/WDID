@@ -21,6 +21,16 @@ if git remote get-url origin >/dev/null 2>&1; then
   git pull --ff-only
 fi
 
+# iCloud legt bei Sync-Konflikten Kopien wie "Datei 2.swift" an, die den Build kaputt machen
+case "$PWD" in
+  "$HOME/Desktop"*|"$HOME/Documents"*|"$HOME/Library/Mobile Documents"*)
+    echo "Hinweis: Der Ordner liegt evtl. in iCloud. Besser nach ~/Developer verschieben (siehe README)." ;;
+esac
+DUPES="$(find . -path ./.git -prune -o -name '* 2.*' -print 2>/dev/null | grep -v '^./node_modules' | head -5 || true)"
+[ -z "$DUPES" ] || fail "Doppelte Dateien gefunden (von iCloud angelegt):
+$DUPES
+Ordner frisch nach ~/Developer klonen, siehe README."
+
 step "Abhängigkeiten prüfen"
 npm ci --no-audit --no-fund --loglevel=error
 
