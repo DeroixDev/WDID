@@ -1,0 +1,14 @@
+{
+  "appId": "de.deroix.wdid",
+  "appName": "WDID",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#F3F4F1"
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "iconColor": "#3D6357"
+    }
+  }
+}

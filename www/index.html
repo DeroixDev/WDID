@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="format-detection" content="telephone=no">
+<title>WDID</title>
+<meta name="theme-color" content="#F3F4F1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: eine ruhige Spalte, Agenda als Liste statt Stundenraster, Tabbar unten, Plus-Knopf unten rechts */
+:root {
+  --bg: #F3F4F1;        /* Birkenweiß, leicht kühl */
+  --surface: #FFFFFF;
+  --line: #E1E3DD;
+  --fg: #1F2522;
+  --muted: #6E7670;
+  --accent: #3D6357;    /* Kiefer */
+  --accent-soft: #DCE6E1;
+  --due: #A8553F;       /* Frist, gedämpftes Rost */
+  --due-soft: #F2E1DA;
+  --work: #4F6480;      /* Arbeit, Fjordblau */
+  --work-soft: #DFE5EE;
+  --f-body: "Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r: 14px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #161A18; --surface: #1F2421; --line: #2E3531; --fg: #E7EAE6; --muted: #949C96;
+  --accent: #8DB5A6; --accent-soft: #263A33; --due: #E09A83; --due-soft: #3A2620;
+  --work: #9FB3D1; --work-soft: #253041; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #161A18; --surface: #1F2421; --line: #2E3531; --fg: #E7EAE6; --muted: #949C96;
+  --accent: #8DB5A6; --accent-soft: #263A33; --due: #E09A83; --due-soft: #3A2620;
+  --work: #9FB3D1; --work-soft: #253041; color-scheme: dark }
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+:root { padding-top: env(safe-area-inset-top, 0px); }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 16px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.app { max-width: 560px; margin: 0 auto; padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); padding-block: 28px calc(120px + env(safe-area-inset-bottom, 0px)); }
+
+header.top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 24px; }
+.weekday { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+h1 { font-size: 30px; font-weight: 600; letter-spacing: -.02em; margin: 2px 0 0; text-wrap: balance; }
+.brand { font-family: var(--f-mono); font-size: 12px; color: var(--muted); letter-spacing: .1em; }
+
+.summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 500; background: var(--surface); border: 1px solid var(--line); color: var(--fg); }
+.pill.due { background: var(--due-soft); border-color: transparent; color: var(--due); }
+.pill.ok { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+
+section.group { margin-bottom: 30px; }
+.group h2 { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 600; margin: 0 0 10px; display: flex; justify-content: space-between; }
+.list { display: flex; flex-direction: column; }
+
+.item { display: grid; grid-template-columns: 56px 1fr auto; gap: 12px; align-items: start; padding: 14px 0; border-top: 1px solid var(--line); }
+.item:last-child { border-bottom: 1px solid var(--line); }
+.time { font-family: var(--f-mono); font-size: 14px; color: var(--muted); padding-top: 2px; font-variant-numeric: tabular-nums; }
+.body { min-width: 0; }
+.title { font-weight: 500; overflow-wrap: anywhere; }
+.desc { color: var(--muted); font-size: 14px; margin-top: 2px; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tag { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+.tag.due { background: var(--due-soft); color: var(--due); }
+.tag.work { background: var(--work-soft); color: var(--work); }
+.tag.plain { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+.item.done .title { text-decoration: line-through; color: var(--muted); }
+.item.overdue .time { color: var(--due); }
+
+.check { width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid var(--line); background: var(--surface); display: grid; place-items: center; padding: 0; margin-top: 1px; }
+.check svg { opacity: 0; }
+.done .check { background: var(--accent); border-color: var(--accent); }
+.done .check svg { opacity: 1; stroke: var(--bg); }
+.item .body { cursor: pointer; }
+
+.empty { color: var(--muted); font-size: 15px; padding: 18px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+
+/* Orte */
+.place { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; margin-bottom: 12px; }
+.place-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.place-name { font-weight: 600; font-size: 17px; }
+.place-sub { font-size: 13px; color: var(--muted); }
+.place.near { border-color: var(--accent); }
+.checklist { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; }
+.checklist li { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); }
+.checklist li.got span { text-decoration: line-through; color: var(--muted); }
+.checklist input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.row-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.btn { border: 1px solid var(--line); background: var(--surface); padding: 8px 14px; border-radius: 10px; font-size: 14px; font-weight: 500; }
+.btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.btn.ghost { background: transparent; }
+.note { font-size: 13px; color: var(--muted); margin: -4px 0 16px; }
+
+/* Suche */
+.search { width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); margin-bottom: 14px; }
+.filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+.chip { border: 1px solid var(--line); background: transparent; padding: 6px 12px; border-radius: 999px; font-size: 13px; }
+.chip[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+
+/* Tabbar + FAB */
+nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom, 0px); padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); z-index: 5; }
+nav.tabs .inner { max-width: 560px; margin: 0 auto; display: grid; grid-template-columns: repeat(3, 1fr); }
+nav.tabs button { background: none; border: 0; padding: 10px 0 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); font-weight: 500; }
+nav.tabs button[aria-current="page"] { color: var(--fg); }
+nav.tabs svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+.fab { position: fixed; right: calc(20px + env(safe-area-inset-right, 0px)); bottom: calc(80px + env(safe-area-inset-bottom, 0px)); width: 58px; height: 58px; border-radius: 18px; border: 0; background: var(--accent); color: var(--bg); display: grid; place-items: center; box-shadow: 0 6px 20px -6px color-mix(in srgb, var(--accent) 70%, transparent); z-index: 6; }
+.fab svg { width: 26px; height: 26px; stroke: currentColor; stroke-width: 2; }
+
+/* Sheet */
+.scrim { position: fixed; inset: 0; background: color-mix(in srgb, var(--fg) 30%, transparent); z-index: 20; }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 21; background: var(--bg); border-radius: 22px 22px 0 0; max-height: 92%; overflow-y: auto; padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); padding-block: 10px calc(24px + env(safe-area-inset-bottom, 0px)); }
+.sheet .inner { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.grabber { width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 4px auto 6px; }
+.sheet h3 { margin: 0; font-size: 20px; font-weight: 600; }
+.types { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.types button { border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 10px 4px; font-size: 13px; font-weight: 500; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.types button[aria-pressed="true"] { border-color: var(--fg); background: var(--fg); color: var(--bg); }
+.types svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.field input, .field textarea, .field select { width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); }
+.field textarea { min-height: 80px; resize: vertical; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.two > * { min-width: 0; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface); padding: 8px 14px; font-size: 14px; }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.sheet-actions { display: flex; gap: 10px; justify-content: space-between; }
+.sheet-actions .btn { padding: 12px 18px; font-size: 15px; }
+.hint { font-size: 13px; color: var(--muted); }
+
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(150px + env(safe-area-inset-bottom, 0px)); background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 30; }
+@media (prefers-reduced-motion: no-preference) {
+  .sheet { animation: up .22s ease-out; }
+  @keyframes up { from { transform: translateY(24px); } to { transform: none; } }
+}
+</style>
+</head>
+<body>
+
+<div class="app" id="app"></div>
+
+<button class="fab" id="fab" aria-label="Neuer Eintrag">
+  <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+</button>
+
+<nav class="tabs" aria-label="Bereiche">
+  <div class="inner">
+    <button data-tab="heute" aria-current="page"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>Heute</button>
+    <button data-tab="orte"><svg viewBox="0 0 24 24"><path d="M12 21s-6-5.6-6-11a6 6 0 1 1 12 0c0 5.4-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/></svg>Orte</button>
+    <button data-tab="alles"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>Alles</button>
+  </div>
+</nav>
+
+<div id="sheetRoot"></div>
+<div id="toastRoot"></div>
+
+<script src="vendor/capacitor.js"></script>
+<script src="build-info.js"></script>
+<script>
+(async () => {
+  /* ---------- Datenmodell ----------
+     Entry {
+       id, type: 'reminder' | 'deadline' | 'place' | 'task',
+       title, notes, context: 'privat' | 'arbeit',
+       date: 'YYYY-MM-DD' | null, time: 'HH:MM' | null,
+       // Frist
+       received: 'YYYY-MM-DD' | null,  // z. B. Eingang des Briefs
+       source: string,                  // Brief, E-Mail, Behörde ...
+       leadDays: number,                // ab wie vielen Tagen vorher auf "Heute" zeigen
+       // Ort
+       placeId: string | null, items: [{ text, done }],
+       repeat: 'none' | 'daily' | 'weekly' | 'monthly',
+       done: bool, doneAt, createdAt
+     }
+     Place { id, name, lat, lng, radius }  // radius in Metern
+  */
+  const KEY = 'wdid.v1';
+  const pad = n => String(n).padStart(2, '0');
+  const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+  const today = () => iso(new Date());
+  const uid = () => Math.random().toString(36).slice(2, 10);
+  const parse = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+  const daysBetween = (a, b) => Math.round((parse(b) - parse(a)) / 864e5);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmtDate = s => parse(s).toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'short' });
+
+  function sample() {
+    const t = new Date();
+    const places = [
+      { id: 'kaufland', name: 'Kaufland', lat: null, lng: null, radius: 150 },
+      { id: 'dm', name: 'dm', lat: null, lng: null, radius: 100 },
+      { id: 'buero', name: 'Büro', lat: null, lng: null, radius: 200 }
+    ];
+    const e = (o) => ({ id: uid(), notes: '', context: 'privat', date: null, time: null, received: null, source: '', leadDays: 3, placeId: null, items: [], repeat: 'none', done: false, createdAt: Date.now(), ...o });
+    return {
+      sample: true,
+      places,
+      entries: [
+        e({ type: 'reminder', title: 'Zahnarzt anrufen, Termin verschieben', date: iso(t), time: '09:30' }),
+        e({ type: 'task', title: 'Wochenbericht abschicken', context: 'arbeit', date: iso(t), time: '12:00', notes: 'An Team-Verteiler, Zahlen aus dem Dashboard.' }),
+        e({ type: 'deadline', title: 'Widerspruch Rundfunkbeitrag', source: 'Brief', received: iso(t), date: iso(addDays(t, 4)), leadDays: 7, notes: 'Beitragsnummer steht oben rechts. Kopie vom Bescheid beilegen.' }),
+        e({ type: 'deadline', title: 'Steuererklärung Belege nachreichen', source: 'Finanzamt', received: iso(addDays(t, -10)), date: iso(addDays(t, 12)), leadDays: 14 }),
+        e({ type: 'reminder', title: 'Paket bei Nachbarn abholen', date: iso(t), time: '18:15' }),
+        e({ type: 'place', title: 'Wocheneinkauf', placeId: 'kaufland', items: [
+          { text: 'Haferflocken', done: false }, { text: 'Milch 1,5 %', done: false }, { text: 'Äpfel', done: true },
+          { text: 'Brot', done: false }, { text: 'Spülmittel', done: false }] }),
+        e({ type: 'place', title: 'Drogerie', placeId: 'dm', items: [{ text: 'Zahnpasta', done: false }, { text: 'Sonnencreme', done: false }] }),
+        e({ type: 'place', title: 'Im Büro erledigen', placeId: 'buero', context: 'arbeit', items: [{ text: 'Laptop-Ladegerät mitnehmen', done: false }, { text: 'Schlüssel bei IT abgeben', done: false }] }),
+        e({ type: 'task', title: 'Altglas wegbringen', date: iso(addDays(t, -1)) }),
+      ]
+    };
+  }
+
+  /* ---------- Native Brücke (nur in der iPhone-App) ---------- */
+  const Cap = window.Capacitor;
+  const native = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
+  const Prefs = native ? Cap.registerPlugin('Preferences') : null;
+  const Notes = native ? Cap.registerPlugin('LocalNotifications') : null;
+
+  // Auf dem iPhone liegen die Daten in den App-Einstellungen (UserDefaults, im iCloud-Backup enthalten),
+  // localStorage dient nur als Zweitkopie bzw. im Browser als einziger Speicher.
+  let state = null;
+  if (native) {
+    try { const { value } = await Prefs.get({ key: KEY }); if (value) state = JSON.parse(value); } catch {}
+  }
+  if (!state) { try { state = JSON.parse(localStorage.getItem(KEY)); } catch {} }
+  if (!state) state = native ? { sample: false, places: [], entries: [] } : sample();
+
+  const save = () => {
+    const json = JSON.stringify(state);
+    try { localStorage.setItem(KEY, json); } catch {}
+    if (native) { Prefs.set({ key: KEY, value: json }).catch(() => {}); scheduleNotifications(); }
+  };
+
+  /* ---------- Signatur-Erinnerung ----------
+     Mit kostenloser Apple-ID läuft die App-Signatur nach 7 Tagen ab. Das Mac-Skript schreibt das
+     Ablaufdatum in build-info.js; WDID legt dafür am Samstag davor einen Eintrag an. */
+  const RESIGN_ID = 'sys-resign';
+  function ensureResignEntry() {
+    const info = window.WDID_BUILD;
+    if (!native || !info) return;
+    const exp = new Date(info.expiresAt);
+    const d = new Date(exp); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - 1);
+    while (d.getDay() !== 6) d.setDate(d.getDate() - 1);
+    const t = parse(today());
+    if (d < t) d.setTime(t.getTime());
+    const date = iso(d);
+    const notes = `Die App-Signatur läuft am ${exp.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })} um ${exp.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })} ab. iPhone per Kabel anschließen und am Mac „WDID aktualisieren“ doppelklicken. Deine Daten bleiben erhalten.`;
+    let e = state.entries.find(x => x.id === RESIGN_ID);
+    if (!e) {
+      e = { id: RESIGN_ID, type: 'task', context: 'privat', received: null, source: '', leadDays: 0, placeId: null, items: [], repeat: 'none', createdAt: Date.now() };
+      state.entries.push(e);
+    }
+    if (e.date !== date) { e.done = false; e.doneAt = null; }
+    Object.assign(e, { title: 'iPhone an den Mac anschließen', notes, date, time: '10:00' });
+  }
+
+  /* ---------- Benachrichtigungen ----------
+     Werden lokal auf dem iPhone geplant und funktionieren ohne Internet.
+     iOS hält höchstens 64 geplante Mitteilungen, deshalb nur die nächsten 60. */
+  const numId = s => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h) % 2147483000 + 1; };
+  const at = (date, time) => { const [h, m] = (time || '09:00').split(':').map(Number); const d = parse(date); d.setHours(h, m, 0, 0); return d; };
+  let notifyAllowed = null, scheduleTimer;
+  function scheduleNotifications() {
+    if (!native) return;
+    clearTimeout(scheduleTimer);
+    scheduleTimer = setTimeout(async () => {
+      try {
+        if (notifyAllowed === null) notifyAllowed = (await Notes.requestPermissions()).display === 'granted';
+        if (!notifyAllowed) return;
+        const pending = (await Notes.getPending()).notifications;
+        if (pending.length) await Notes.cancel({ notifications: pending.map(n => ({ id: n.id })) });
+        const now = Date.now(), list = [];
+        for (const e of state.entries) {
+          if (e.done || !e.date || e.type === 'place') continue;
+          if (e.type === 'deadline') {
+            const lead = e.leadDays || 0;
+            if (lead > 0) list.push({ id: numId(e.id + ':lead'), title: `Frist in ${lead} ${lead === 1 ? 'Tag' : 'Tagen'}`, body: e.title, at: at(iso(addDays(parse(e.date), -lead)), '09:00') });
+            list.push({ id: numId(e.id + ':due'), title: 'Frist heute', body: e.title, at: at(e.date, '08:00') });
+          } else if (e.time) {
+            list.push({ id: numId(e.id), title: e.title, body: e.notes || (e.type === 'task' ? 'Aufgabe' : 'Erinnerung'), at: at(e.date, e.time) });
+          }
+        }
+        const next = list.filter(n => n.at.getTime() > now).sort((a, b) => a.at - b.at).slice(0, 60)
+          .map(n => ({ id: n.id, title: n.title, body: n.body, schedule: { at: n.at, allowWhileIdle: true } }));
+        if (next.length) await Notes.schedule({ notifications: next });
+      } catch (err) { console.warn('Benachrichtigungen', err); }
+    }, 300);
+  }
+  ensureResignEntry();
+  if (native) { save(); }
+
+  let tab = (location.hash || '').slice(1);
+  if (!['heute', 'orte', 'alles'].includes(tab)) tab = 'heute';
+  let filter = 'alle', query = '';
+  let here = null; // { lat, lng }
+
+  const TYPE = {
+    reminder: { label: 'Erinnerung', icon: '<circle cx="12" cy="13" r="7"/><path d="M12 9v4l2.5 2M5 4l3 2M19 4l-3 2"/>' },
+    deadline: { label: 'Frist', icon: '<path d="M6 3h12M6 21h12M7 3c0 5 10 5 10 9s-10 4-10 9M17 3c0 5-10 5-10 9s10 4 10 9"/>' },
+    place:    { label: 'Ortsliste', icon: '<path d="M12 21s-6-5.6-6-11a6 6 0 1 1 12 0c0 5.4-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/>' },
+    task:     { label: 'Aufgabe', icon: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12l3 3 5-6"/>' },
+  };
+  const checkSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>';
+
+  /* ---------- Wiederholung ---------- */
+  function complete(entry) {
+    if (entry.repeat !== 'none' && entry.date) {
+      const d = parse(entry.date);
+      if (entry.repeat === 'daily') d.setDate(d.getDate() + 1);
+      if (entry.repeat === 'weekly') d.setDate(d.getDate() + 7);
+      if (entry.repeat === 'monthly') d.setMonth(d.getMonth() + 1);
+      entry.date = iso(d);
+      toast('Erledigt. Nächstes Mal am ' + fmtDate(entry.date));
+    } else {
+      entry.done = !entry.done; entry.doneAt = entry.done ? Date.now() : null;
+    }
+    save(); render();
+  }
+
+  /* ---------- Heute ---------- */
+  function todayModel() {
+    const t = today();
+    const open = state.entries.filter(e => e.type !== 'place');
+    const overdue = open.filter(e => !e.done && e.date && e.date < t && e.type !== 'deadline')
+      .concat(open.filter(e => !e.done && e.type === 'deadline' && e.date < t));
+    const todays = open.filter(e => e.date === t && (e.type !== 'deadline'))
+      .sort((a, b) => (a.time || '99') .localeCompare(b.time || '99'));
+    const deadlinesToday = open.filter(e => e.type === 'deadline' && e.date === t);
+    const upcoming = open.filter(e => e.type === 'deadline' && !e.done && e.date > t && daysBetween(t, e.date) <= (e.leadDays ?? 3))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const lists = state.entries.filter(e => e.type === 'place' && !e.done && e.items.some(i => !i.done));
+    return { overdue, todays: [...deadlinesToday, ...todays], upcoming, lists };
+  }
+
+  function itemRow(e, { showDate = false } = {}) {
+    const t = today();
+    const overdue = !e.done && e.date && e.date < t;
+    let timeCol = e.time || '—';
+    if (e.type === 'deadline') timeCol = 'Frist';
+    if (showDate && e.date) timeCol = parse(e.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+    const tags = [];
+    if (e.type === 'deadline') {
+      const left = daysBetween(t, e.date);
+      const txt = left < 0 ? `${-left} ${-left === 1 ? 'Tag' : 'Tage'} überfällig` : left === 0 ? 'heute fällig' : left === 1 ? 'morgen fällig' : `noch ${left} Tage · ${fmtDate(e.date)}`;
+      tags.push(`<span class="tag due">${txt}</span>`);
+      if (e.source) tags.push(`<span class="tag plain">${esc(e.source)}${e.received ? ' vom ' + parse(e.received).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) : ''}</span>`);
+    } else if (overdue) {
+      tags.push(`<span class="tag due">seit ${fmtDate(e.date)}</span>`);
+    }
+    if (e.context === 'arbeit') tags.push('<span class="tag work">Arbeit</span>');
+    if (e.repeat && e.repeat !== 'none') tags.push(`<span class="tag plain">${{ daily: 'täglich', weekly: 'wöchentlich', monthly: 'monatlich' }[e.repeat]}</span>`);
+    return `<div class="item ${e.done ? 'done' : ''} ${overdue ? 'overdue' : ''}">
+      <div class="time">${esc(timeCol)}</div>
+      <div class="body" data-edit="${e.id}">
+        <div class="title">${esc(e.title)}</div>
+        ${e.notes ? `<div class="desc">${esc(e.notes)}</div>` : ''}
+        ${tags.length ? `<div class="meta">${tags.join('')}</div>` : ''}
+      </div>
+      <button class="check" data-done="${e.id}" aria-label="${e.done ? 'Wieder öffnen' : 'Erledigt'}">${checkSvg}</button>
+    </div>`;
+  }
+
+  function group(title, rows, aside = '') {
+    return `<section class="group"><h2><span>${title}</span><span>${aside}</span></h2><div class="list">${rows}</div></section>`;
+  }
+
+  function viewHeute() {
+    const d = new Date();
+    const m = todayModel();
+    const openToday = m.todays.filter(e => !e.done).length;
+    const pills = [];
+    if (m.overdue.length) pills.push(`<span class="pill due">${m.overdue.length} überfällig</span>`);
+    pills.push(`<span class="pill">${openToday} offen heute</span>`);
+    if (m.upcoming.length) pills.push(`<span class="pill due">${m.upcoming.length} ${m.upcoming.length === 1 ? 'Frist' : 'Fristen'} bald</span>`);
+    if (m.lists.length) pills.push(`<span class="pill ok">${m.lists.length} Ortslisten</span>`);
+
+    let html = `<header class="top"><div><div class="weekday">${d.toLocaleDateString('de-DE', { weekday: 'long' })}</div>
+      <h1>${d.toLocaleDateString('de-DE', { day: 'numeric', month: 'long' })}</h1></div><div class="brand">WDID</div></header>
+      ${state.sample ? '<p class="note">Beispieldaten. Sie verschwinden, sobald du unter „Alles“ auf „Beispiele löschen“ tippst.</p>' : ''}
+      <div class="summary">${pills.join('')}</div>`;
+
+    if (m.overdue.length) html += group('Liegengeblieben', m.overdue.map(e => itemRow(e, { showDate: true })).join(''));
+    html += group('Heute', m.todays.length ? m.todays.map(e => itemRow(e)).join('') : '<div class="empty">Nichts geplant. Mit + legst du etwas an.</div>');
+    if (m.upcoming.length) html += group('Fristen in Sicht', m.upcoming.map(e => itemRow(e)).join(''));
+    if (m.lists.length) html += group('Wenn du unterwegs bist', m.lists.map(e => {
+      const p = state.places.find(p => p.id === e.placeId);
+      const left = e.items.filter(i => !i.done).length;
+      return `<div class="item"><div class="time">Ort</div><div class="body" data-goto="orte"><div class="title">${esc(p ? p.name : 'Ort')} · ${esc(e.title)}</div>
+        <div class="desc">${left} von ${e.items.length} offen: ${esc(e.items.filter(i => !i.done).slice(0, 3).map(i => i.text).join(', '))}${left > 3 ? ' …' : ''}</div></div><span></span></div>`;
+    }).join(''));
+    return html;
+  }
+
+  /* ---------- Orte ---------- */
+  function dist(a, b) {
+    const R = 6371e3, r = x => x * Math.PI / 180;
+    const dLat = r(b.lat - a.lat), dLng = r(b.lng - a.lng);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  function viewOrte() {
+    let html = `<header class="top"><div><div class="weekday">Ortsgebunden</div><h1>Orte</h1></div><div class="brand">WDID</div></header>
+      <p class="note">Listen, die nicht an eine Uhrzeit hängen, sondern an einen Ort. Speichere den Standort einmal vor Ort, dann meldet sich WDID, wenn du wieder dort bist.</p>
+      <div class="row-actions" style="margin:0 0 20px"><button class="btn" id="locate">Wo bin ich gerade?</button></div>`;
+    const placeIds = [...new Set(state.entries.filter(e => e.type === 'place').map(e => e.placeId))];
+    const places = state.places.filter(p => placeIds.includes(p.id));
+    if (!places.length) return html + '<div class="empty">Noch keine Ortslisten. Lege mit + eine „Ortsliste“ an.</div>';
+    places.forEach(p => {
+      const lists = state.entries.filter(e => e.type === 'place' && e.placeId === p.id);
+      let sub = p.lat != null ? `Standort gespeichert · ${p.radius} m Radius` : 'Kein Standort gespeichert';
+      let near = false;
+      if (here && p.lat != null) { const m = dist(here, p); near = m <= p.radius; sub = near ? 'Du bist hier' : `${m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(1) + ' km'} entfernt`; }
+      html += `<div class="place ${near ? 'near' : ''}"><div class="place-head"><div class="place-name">${esc(p.name)}</div><div class="place-sub">${sub}</div></div>`;
+      lists.forEach(l => {
+        html += `<div class="desc" style="margin-top:12px;display:flex;justify-content:space-between;gap:8px"><span data-edit="${l.id}" style="cursor:pointer">${esc(l.title)}${l.context === 'arbeit' ? ' · Arbeit' : ''}</span><span>${l.items.filter(i => i.done).length}/${l.items.length}</span></div>
+          <ul class="checklist">${l.items.map((it, i) => `<li class="${it.done ? 'got' : ''}"><input type="checkbox" id="ci-${l.id}-${i}" data-list="${l.id}" data-idx="${i}" ${it.done ? 'checked' : ''}><span><label for="ci-${l.id}-${i}">${esc(it.text)}</label></span></li>`).join('')}</ul>`;
+      });
+      html += `<div class="row-actions"><button class="btn" data-pin="${p.id}">Standort hier speichern</button>
+        <button class="btn ghost" data-clear="${p.id}">Abgehakte entfernen</button></div></div>`;
+    });
+    return html;
+  }
+
+  /* ---------- Alles ---------- */
+  function viewAlles() {
+    const q = query.trim().toLowerCase();
+    let list = state.entries.filter(e => {
+      if (filter === 'arbeit' && e.context !== 'arbeit') return false;
+      if (['reminder', 'deadline', 'place', 'task'].includes(filter) && e.type !== filter) return false;
+      if (filter === 'erledigt' ? !e.done : e.done) return false;
+      if (!q) return true;
+      return [e.title, e.notes, e.source, ...(e.items || []).map(i => i.text)].join(' ').toLowerCase().includes(q);
+    }).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999') || (a.time || '').localeCompare(b.time || ''));
+    const chips = [['alle', 'Alle'], ['deadline', 'Fristen'], ['reminder', 'Erinnerungen'], ['task', 'Aufgaben'], ['place', 'Ortslisten'], ['arbeit', 'Arbeit'], ['erledigt', 'Erledigt']]
+      .map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${filter === k}">${l}</button>`).join('');
+    const rows = list.map(e => e.type === 'place'
+      ? `<div class="item"><div class="time">Ort</div><div class="body" data-edit="${e.id}"><div class="title">${esc((state.places.find(p => p.id === e.placeId) || {}).name || '')} · ${esc(e.title)}</div><div class="desc">${e.items.filter(i => !i.done).length} offen</div></div><span></span></div>`
+      : itemRow(e, { showDate: true })).join('');
+    return `<header class="top"><div><div class="weekday">Archiv und Suche</div><h1>Alles</h1></div><div class="brand">WDID</div></header>
+      <input class="search" id="q" type="search" placeholder="Suchen, z. B. Brief, Kaufland, Steuer" value="${esc(query)}">
+      <div class="filters">${chips}</div>
+      ${rows ? `<div class="list">${rows}</div>` : '<div class="empty">Nichts gefunden.</div>'}
+      <div class="row-actions" style="margin-top:28px"><button class="btn ghost" id="reset">${state.sample ? 'Beispiele löschen' : 'Alle Daten löschen'}</button></div>
+      <div id="resetConfirm"></div>`;
+  }
+
+  /* ---------- Eintrag-Sheet ---------- */
+  function openSheet(entry) {
+    const isNew = !entry;
+    const t = today();
+    const e = entry ? JSON.parse(JSON.stringify(entry)) : { type: 'reminder', title: '', notes: '', context: 'privat', date: t, time: '', received: t, source: 'Brief', leadDays: 3, placeId: state.places[0]?.id || '', items: [], repeat: 'none' };
+    const root = document.getElementById('sheetRoot');
+    const draw = () => {
+      const placeOpts = state.places.map(p => `<option value="${p.id}" ${p.id === e.placeId ? 'selected' : ''}>${esc(p.name)}</option>`).join('') + '<option value="__new">Neuer Ort …</option>';
+      root.innerHTML = `<div class="scrim" data-close></div>
+      <div class="sheet" role="dialog" aria-modal="true" aria-label="${isNew ? 'Neuer Eintrag' : 'Eintrag bearbeiten'}"><div class="inner">
+        <div class="grabber"></div>
+        <h3>${isNew ? 'Neuer Eintrag' : 'Bearbeiten'}</h3>
+        <div class="types">${Object.entries(TYPE).map(([k, v]) => `<button type="button" data-type="${k}" aria-pressed="${e.type === k}"><svg viewBox="0 0 24 24">${v.icon}</svg>${v.label}</button>`).join('')}</div>
+        <div class="field"><label for="f-title">${e.type === 'place' ? 'Name der Liste' : 'Was?'}</label>
+          <input id="f-title" value="${esc(e.title)}" placeholder="${{ reminder: 'z. B. Mama zurückrufen', deadline: 'z. B. Antwort an Versicherung', place: 'z. B. Wocheneinkauf', task: 'z. B. Fahrrad aufpumpen' }[e.type]}"></div>
+        ${e.type === 'deadline' ? `
+          <div class="two"><div class="field"><label for="f-source">Woher</label><input id="f-source" value="${esc(e.source)}" placeholder="Brief, E-Mail …"></div>
+          <div class="field"><label for="f-received">Eingegangen am</label><input id="f-received" type="date" value="${e.received || t}"></div></div>
+          <div class="two"><div class="field"><label for="f-date">Frist bis</label><input id="f-date" type="date" value="${e.date || ''}"></div>
+          <div class="field"><label for="f-lead">Vorher anzeigen</label><select id="f-lead">${[1, 3, 7, 14, 30].map(n => `<option value="${n}" ${n == e.leadDays ? 'selected' : ''}>${n} ${n === 1 ? 'Tag' : 'Tage'} vorher</option>`).join('')}</select></div></div>` : ''}
+        ${e.type === 'reminder' || e.type === 'task' ? `
+          <div class="two"><div class="field"><label for="f-date">Tag</label><input id="f-date" type="date" value="${e.date || ''}"></div>
+          <div class="field"><label for="f-time">Uhrzeit${e.type === 'task' ? ' (optional)' : ''}</label><input id="f-time" type="time" value="${e.time || ''}"></div></div>
+          <div class="field"><label for="f-repeat">Wiederholen</label><select id="f-repeat">${[['none', 'Nie'], ['daily', 'Täglich'], ['weekly', 'Wöchentlich'], ['monthly', 'Monatlich']].map(([k, l]) => `<option value="${k}" ${e.repeat === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>` : ''}
+        ${e.type === 'place' ? `
+          <div class="field"><label for="f-place">Ort</label><select id="f-place">${placeOpts}</select></div>
+          <div class="field" id="newPlaceField" hidden><label for="f-newplace">Name des neuen Orts</label><input id="f-newplace" placeholder="z. B. Lidl Hauptstraße"></div>
+          <div class="field"><label for="f-items">Liste, eine Zeile pro Punkt</label><textarea id="f-items" placeholder="Milch&#10;Brot&#10;Äpfel">${esc(e.items.map(i => i.text).join('\n'))}</textarea></div>
+          <p class="hint">Den Standort speicherst du im Tab „Orte“, wenn du einmal dort bist.</p>` : ''}
+        <div class="field"><label for="f-notes">Details</label><textarea id="f-notes" placeholder="Aktenzeichen, Ansprechpartner, was zu tun ist …">${esc(e.notes)}</textarea></div>
+        <div class="field"><label>Bereich</label><div class="seg">${['privat', 'arbeit'].map(c => `<button type="button" data-ctx="${c}" aria-pressed="${e.context === c}">${c === 'privat' ? 'Privat' : 'Arbeit'}</button>`).join('')}</div></div>
+        <p class="hint" id="formError" hidden></p>
+        <div class="sheet-actions">
+          ${isNew ? '<button class="btn ghost" data-close>Abbrechen</button>' : `<button class="btn ghost" id="del">${confirmDel ? 'Wirklich löschen?' : 'Löschen'}</button>`}
+          <button class="btn primary" id="saveBtn">${isNew ? 'Speichern' : 'Fertig'}</button>
+        </div>
+      </div></div>`;
+      if (isNew) setTimeout(() => document.getElementById('f-title')?.focus(), 50);
+    };
+    let confirmDel = false;
+    const read = () => {
+      const v = id => document.getElementById(id)?.value;
+      e.title = (v('f-title') || '').trim(); e.notes = (v('f-notes') || '').trim();
+      if (v('f-date') !== undefined) e.date = v('f-date') || null;
+      if (v('f-time') !== undefined) e.time = v('f-time') || null;
+      if (v('f-repeat') !== undefined) e.repeat = v('f-repeat');
+      if (v('f-source') !== undefined) e.source = v('f-source').trim();
+      if (v('f-received') !== undefined) e.received = v('f-received') || null;
+      if (v('f-lead') !== undefined) e.leadDays = Number(v('f-lead'));
+      if (v('f-place') !== undefined) e.placeId = v('f-place');
+      if (v('f-items') !== undefined) {
+        const old = Object.fromEntries(e.items.map(i => [i.text, i.done]));
+        e.items = v('f-items').split('\n').map(s => s.trim()).filter(Boolean).map(text => ({ text, done: !!old[text] }));
+      }
+    };
+    draw();
+    root.onclick = ev => {
+      const b = ev.target.closest('button, .scrim');
+      if (!b) return;
+      if (b.hasAttribute('data-close')) return close();
+      if (b.dataset.type) { read(); e.type = b.dataset.type; if (e.type === 'deadline' && (!e.date || e.date <= today())) e.date = iso(addDays(new Date(), 14)); draw(); return; }
+      if (b.dataset.ctx) { read(); e.context = b.dataset.ctx; draw(); return; }
+      if (b.id === 'del') { if (!confirmDel) { read(); confirmDel = true; draw(); return; } state.entries = state.entries.filter(x => x.id !== e.id); save(); close(); toast('Gelöscht'); render(); return; }
+      if (b.id === 'saveBtn') {
+        read();
+        const err = document.getElementById('formError');
+        if (e.type === 'place' && e.placeId === '__new') {
+          const name = (document.getElementById('f-newplace').value || '').trim();
+          if (!name) { err.hidden = false; err.textContent = 'Gib dem neuen Ort einen Namen.'; return; }
+          const p = { id: uid(), name, lat: null, lng: null, radius: 150 }; state.places.push(p); e.placeId = p.id;
+        }
+        if (!e.title) { err.hidden = false; err.textContent = 'Schreib kurz, worum es geht.'; return; }
+        if (e.type === 'deadline' && !e.date) { err.hidden = false; err.textContent = 'Eine Frist braucht ein Datum.'; return; }
+        if (e.type !== 'place') { e.items = []; }
+        if (isNew) state.entries.push({ ...e, id: uid(), done: false, createdAt: Date.now() });
+        else Object.assign(state.entries.find(x => x.id === e.id), e);
+        save(); close(); toast(isNew ? 'Gespeichert' : 'Geändert'); render();
+      }
+    };
+    root.onchange = ev => { if (ev.target.id === 'f-place') document.getElementById('newPlaceField').hidden = ev.target.value !== '__new'; };
+    function close() { root.innerHTML = ''; root.onclick = null; }
+  }
+
+  /* ---------- Standort ---------- */
+  function locate(cb) {
+    if (!navigator.geolocation) return toast('Standort ist auf diesem Gerät nicht verfügbar.');
+    navigator.geolocation.getCurrentPosition(
+      pos => { here = { lat: pos.coords.latitude, lng: pos.coords.longitude }; cb && cb(here); checkNearby(); render(); },
+      () => toast('Standort nicht freigegeben. In der installierten App fragt WDID danach.'),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }
+  function checkNearby() {
+    if (!here) return;
+    const p = state.places.find(p => p.lat != null && dist(here, p) <= p.radius);
+    if (!p) return;
+    const open = state.entries.filter(e => e.type === 'place' && e.placeId === p.id).reduce((n, l) => n + l.items.filter(i => !i.done).length, 0);
+    if (open) toast(`Du bist bei ${p.name}: ${open} Punkte offen`);
+  }
+
+  /* ---------- Toast ---------- */
+  let toastTimer;
+  function toast(msg) {
+    const r = document.getElementById('toastRoot');
+    r.innerHTML = `<div class="toast" role="status">${esc(msg)}</div>`;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => r.innerHTML = '', 2600);
+  }
+
+  /* ---------- Render + Events ---------- */
+  const app = document.getElementById('app');
+  function render() {
+    app.innerHTML = tab === 'heute' ? viewHeute() : tab === 'orte' ? viewOrte() : viewAlles();
+    document.querySelectorAll('nav.tabs button').forEach(b => b.dataset.tab === tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
+  }
+  document.querySelector('nav.tabs').onclick = ev => { const b = ev.target.closest('button'); if (!b) return; tab = b.dataset.tab; render(); window.scrollTo(0, 0); };
+  document.getElementById('fab').onclick = () => openSheet(null);
+  let resetArmed = false;
+  app.addEventListener('click', ev => {
+    const el = ev.target.closest('[data-done],[data-edit],[data-goto],[data-filter],[data-pin],[data-clear],#locate,#reset');
+    if (!el) return;
+    if (el.dataset.done) return complete(state.entries.find(e => e.id === el.dataset.done));
+    if (el.dataset.edit) return openSheet(state.entries.find(e => e.id === el.dataset.edit));
+    if (el.dataset.goto) { tab = el.dataset.goto; return render(); }
+    if (el.dataset.filter) { filter = el.dataset.filter; return render(); }
+    if (el.id === 'locate') return locate();
+    if (el.dataset.pin) return locate(pos => { const p = state.places.find(p => p.id === el.dataset.pin); p.lat = pos.lat; p.lng = pos.lng; save(); toast(`Standort für ${p.name} gespeichert`); });
+    if (el.dataset.clear) { state.entries.filter(e => e.type === 'place' && e.placeId === el.dataset.clear).forEach(l => l.items = l.items.filter(i => !i.done)); save(); return render(); }
+    if (el.id === 'reset') {
+      if (!resetArmed) { resetArmed = true; el.textContent = 'Tippe nochmal zum Bestätigen'; return; }
+      resetArmed = false; state = { sample: false, places: [], entries: [] }; ensureResignEntry(); save(); toast('Gelöscht'); render();
+    }
+  });
+  app.addEventListener('change', ev => {
+    const c = ev.target;
+    if (c.dataset.list) { const l = state.entries.find(e => e.id === c.dataset.list); l.items[+c.dataset.idx].done = c.checked; save(); render(); }
+  });
+  app.addEventListener('input', ev => {
+    if (ev.target.id === 'q') { query = ev.target.value; const pos = ev.target.selectionStart; render(); const q = document.getElementById('q'); q.focus(); q.setSelectionRange(pos, pos); }
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); });
+  render();
+})();
+</script>
+</body>
+</html>

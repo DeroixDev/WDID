@@ -1,0 +1,19 @@
+{
+  "name": "wdid",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WDID – What Did I Do. Offline-Alltags-App für iPhone.",
+  "scripts": {
+    "build-info": "node scripts/build-info.mjs",
+    "sync": "npm run build-info && cap sync ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "8.3.1",
+    "@capacitor/ios": "8.3.1",
+    "@capacitor/local-notifications": "8.3.1",
+    "@capacitor/preferences": "8.0.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.3.1"
+  }
+}
