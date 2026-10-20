@@ -8,6 +8,10 @@
 <meta name="theme-color" content="#F3F4F1">
 <title>WDID</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+  // Theme schon vor dem ersten Bild setzen, damit nichts aufblitzt
+  try { const l = JSON.parse(localStorage.getItem('wdid.look') || '{}'); if (l.theme) document.documentElement.dataset.theme = l.theme; if (l.motion === false) document.documentElement.dataset.motion = 'off'; } catch (e) {}
+</script>
 </head>
 <body>
 <div class="app" id="app"></div>

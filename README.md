@@ -26,7 +26,8 @@ Aufbau: Die Oberfläche ist eine einzige Datei (`www/index.html`, Vanilla JS). C
 - **Orte:** Listen für einen Laden, für „jeden Supermarkt“ oder für Personen („Wenn du Mama siehst“). Einkaufslisten sind nach Abteilungen sortiert, WDID lernt deinen Weg durch den Laden und schlägt Dinge vor, die du regelmäßig kaufst. Mit Standort „Immer“ meldet sich WDID bei Ankunft, auch wenn die App zu ist.
 - **Verlauf:** alles Erledigte mit Uhrzeit und Ort, durchsuchbar, Wochenrückblick, Tagesrückblick mit „auf morgen schieben“.
 - **Mitteilungen:** Morgen-Briefing und Tagesabschluss (Uhrzeit in den Einstellungen), Erinnerungen, Fristen, Kündigungstermine.
-- **Einstellungen** (Zahnrad unter „Alles“): Bundesland, Briefing-Zeiten, Arbeit nach Feierabend ausblenden, Face-ID-Sperre, verschlüsseltes Backup in die Dateien-App und zurück.
+- **Aussehen:** acht Themes (System, Birke, Sand, Fjord, Heide, Nacht, Polarnacht, Schwarz für OLED), sanfte Übergänge, Funken und Vibration beim Abhaken, Konfetti wenn der Tag oder eine Liste geschafft ist. Animationen lassen sich abschalten und richten sich nach „Bewegung reduzieren“ von iOS.
+- **Einstellungen** (Zahnrad unter „Alles“): Theme, Animationen, Bundesland, Briefing-Zeiten, Arbeit nach Feierabend ausblenden, Face-ID-Sperre, verschlüsseltes Backup in die Dateien-App und zurück.
 
 ### Action-Button
 

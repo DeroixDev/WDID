@@ -20,6 +20,7 @@
   const plugin = name => (native ? Cap.registerPlugin(name) : null);
   const Prefs = plugin('Preferences'), Notes = plugin('LocalNotifications'), Clip = plugin('Clipboard');
   const Native = plugin('WDIDNative'), FS = plugin('Filesystem'), Share = plugin('Share'), AppP = plugin('App');
+  const Haptics = plugin('Haptics'), StatusBar = plugin('StatusBar');
 
   /* ---------- Typen ---------- */
   const TYPE = {
@@ -34,11 +35,22 @@
   const DATED_ALERT = ['deadline', 'contract', 'document'];   // erscheinen mit Vorlauf unter „Fristen in Sicht“
   const GROUPS = { supermarkt: 'Supermarkt', drogerie: 'Drogerie', apotheke: 'Apotheke', baumarkt: 'Baumarkt' };
   const PROOF = ['Einschreiben', 'Brief', 'E-Mail', 'Online-Portal', 'Fax', 'Telefon', 'Persönlich', 'Sonstiges'];
+  const THEMES = {
+    system: { name: 'System' },
+    birke:  { name: 'Birke', bg: '#F3F4F1', sf: '#FFFFFF', ac: '#3D6357' },
+    sand:   { name: 'Sand', bg: '#F5F0E8', sf: '#FFFCF7', ac: '#86663D' },
+    fjord:  { name: 'Fjord', bg: '#EEF2F4', sf: '#FFFFFF', ac: '#2F5E80' },
+    heide:  { name: 'Heide', bg: '#F4F1F4', sf: '#FFFFFF', ac: '#6E4E78' },
+    nacht:  { name: 'Nacht', bg: '#161A18', sf: '#1F2421', ac: '#8DB5A6', dark: true },
+    polar:  { name: 'Polarnacht', bg: '#10151C', sf: '#18202A', ac: '#8FB8DE', dark: true },
+    oled:   { name: 'Schwarz', bg: '#000000', sf: '#0F1110', ac: '#93C9B4', dark: true },
+  };
   const checkSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>';
 
   /* ---------- Daten ---------- */
   const DEFAULT_SETTINGS = { state: 'NW', morningOn: true, morningTime: '07:30', eveningOn: true, eveningTime: '20:30',
-    lock: false, workFilter: false, workStart: '08:00', workEnd: '17:00', workDays: [1, 2, 3, 4, 5] };
+    lock: false, workFilter: false, workStart: '08:00', workEnd: '17:00', workDays: [1, 2, 3, 4, 5],
+    theme: 'system', motion: true, haptics: true };
   const blank = () => ({ version: 2, sample: false, places: [], entries: [], cases: [], routes: {}, shop: {}, history: {}, log: [], settings: { ...DEFAULT_SETTINGS } });
   const newEntry = o => ({ id: uid(), type: 'task', title: '', notes: '', context: 'privat', date: null, time: null, received: null, source: '',
     leadDays: 3, placeId: null, group: null, items: [], repeat: 'none', caseId: null, photos: [], proof: null, contract: null,
@@ -484,6 +496,8 @@
     let html = header(d.toLocaleDateString('de-DE', { weekday: 'long' }), d.toLocaleDateString('de-DE', { day: 'numeric', month: 'long' }));
     if (state.sample) html += '<p class="note">Beispieldaten. Unter „Alles“ kannst du sie mit „Beispiele löschen“ entfernen.</p>';
     html += `<div class="summary">${pills.join('')}<button class="pill" id="copyDay" type="button">Tag kopieren</button></div>`;
+    const dayItems = visible(m.todays), dayDone = dayItems.filter(e => e.done).length;
+    if (dayItems.length) html += `<div class="day-progress">${progressBar('day', dayDone, dayItems.length)}<span><b>${dayDone}</b> von ${dayItems.length} geschafft</span></div>`;
     if (state.settings.eveningOn && nowMinutes() >= toMinutes(state.settings.eveningTime)) {
       const doneToday = state.log.filter(l => iso(new Date(l.at)) === t).length;
       html += `<div class="banner"><span>Tagesabschluss: ${doneToday} erledigt, ${openToday + m.overdue.length} offen</span><button class="btn small" data-review>Rückblick</button></div>`;
@@ -517,6 +531,7 @@
       let h = `<div class="card ${isNear ? 'accent' : ''}"><div class="card-row"><h3>${esc(title)}</h3><span class="sub">${sub}</span></div>`;
       lists.forEach(l => {
         h += `<div class="card-row"><span class="sub" data-edit="${l.id}" style="cursor:pointer">${esc(l.title)}${l.context === 'arbeit' ? ' · Arbeit' : ''}</span><span class="sub">${l.items.filter(i => i.done).length}/${l.items.length}</span></div>`;
+        h += progressBar('list-' + l.id, l.items.filter(i => i.done).length, l.items.length);
         const pl = placeById(l.placeId);
         h += shoppingList(l, { compact: !l.group && pl?.kind !== 'store' });
         h += `<div class="row-actions"><button class="btn small" data-addlist="${l.id}">Punkt hinzufügen</button><button class="btn small ghost" data-copylist="${l.id}">Kopieren</button><button class="btn small ghost" data-clear="${l.id}">Abgehakte entfernen</button></div>`;
@@ -628,13 +643,22 @@
 
   /* ---------- Sheets ---------- */
   const sheetRoot = document.getElementById('sheetRoot');
+  let sheetTimer;
   function showSheet(innerHtml, label, onClick, onChange) {
+    clearTimeout(sheetTimer); sheetRoot.classList.remove('closing');
     sheetRoot.innerHTML = `<div class="scrim" data-close></div><div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(label)}"><div class="inner"><div class="grabber"></div>${innerHtml}</div></div>`;
     sheetRoot.onclick = ev => { if (ev.target.closest('[data-close]')) return closeSheet(); onClick && onClick(ev); };
     sheetRoot.onchange = onChange || null;
     sheetRoot.onkeydown = null;
   }
-  function closeSheet() { sheetRoot.innerHTML = ''; sheetRoot.onclick = sheetRoot.onchange = sheetRoot.onkeydown = null; }
+  function closeSheet() {
+    sheetRoot.onclick = sheetRoot.onchange = sheetRoot.onkeydown = null;
+    if (!sheetRoot.firstChild) return;
+    // erst sanft nach unten gleiten lassen, dann entfernen
+    if (!motionOn()) { sheetRoot.innerHTML = ''; return; }
+    sheetRoot.classList.add('closing');
+    clearTimeout(sheetTimer); sheetTimer = setTimeout(() => { sheetRoot.innerHTML = ''; sheetRoot.classList.remove('closing'); }, 240);
+  }
 
   function openSheet(entry, { draft = null, type = null, caseId = null, placeId = null, info = null, quick = false } = {}) {
     const isNew = !entry;
@@ -921,8 +945,15 @@
   function openSettings() {
     const s = state.settings;
     const sw = (id, on) => `<input type="checkbox" class="switch" id="${id}" ${on ? 'checked' : ''}>`;
+    const themeBtns = Object.entries(THEMES).map(([k, t]) => `<button type="button" data-theme-pick="${k}" aria-pressed="${s.theme === k}">
+        <span class="swatch${k === 'system' ? ' sys' : ''}" style="${t.bg ? `--s-bg:${t.bg};--s-sf:${t.sf};--s-ac:${t.ac}` : ''}"></span>${t.name}</button>`).join('');
     showSheet(`
       <h3>Einstellungen</h3>
+      <div class="dept">Aussehen</div>
+      <div class="themes">${themeBtns}</div>
+      <div class="setting"><div><div class="title">Animationen</div><div class="hint">Sanfte Übergänge, Funken und Konfetti beim Abhaken</div></div>${sw('s-motion', s.motion)}</div>
+      ${native ? `<div class="setting"><div><div class="title">Vibration</div><div class="hint">Leichtes Tippen beim Abhaken</div></div>${sw('s-haptics', s.haptics)}</div>` : ''}
+      <div class="dept">Alltag</div>
       <div class="setting"><div><div class="title">Bundesland</div><div class="hint">Für Feiertage im Fristrechner</div></div><select id="s-state">${Object.entries(L.STATES).map(([k, n]) => `<option value="${k}" ${s.state === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
       <div class="setting"><div><div class="title">Morgen-Briefing</div><div class="hint">Eine Mitteilung mit allem für den Tag</div></div><div class="row-actions" style="margin:0"><input type="time" id="s-morningTime" value="${s.morningTime}">${sw('s-morningOn', s.morningOn)}</div></div>
       <div class="setting"><div><div class="title">Tagesabschluss</div><div class="hint">Rückblick und Offenes verschieben</div></div><div class="row-actions" style="margin:0"><input type="time" id="s-eveningTime" value="${s.eveningTime}">${sw('s-eveningOn', s.eveningOn)}</div></div>
@@ -938,6 +969,11 @@
       <div class="sheet-actions"><button class="btn primary" data-close>Fertig</button></div>`,
       'Einstellungen', async ev => {
         const b = ev.target.closest('button'); if (!b) return;
+        if (b.dataset.themePick) {
+          s.theme = b.dataset.themePick; save(); applyLook(true); haptic('select');
+          sheetRoot.querySelectorAll('[data-theme-pick]').forEach(x => x.setAttribute('aria-pressed', x === b));
+          return;
+        }
         if (b.id === 'exportBtn') return exportBackup(document.getElementById('b-pass').value);
         if (b.id === 'importBtn') return importBackup(document.getElementById('b-pass').value);
       }, async ev => {
@@ -948,6 +984,8 @@
           if (!r.success) { ev.target.checked = false; return toast('Face ID ist nicht verfügbar'); }
         }
         s[k] = ev.target.type === 'checkbox' ? ev.target.checked : ev.target.value;
+        if (k === 'motion') applyLook(false);
+        if (k === 'haptics' && s.haptics) haptic('medium');
         save(); render();
       });
   }
@@ -1003,7 +1041,7 @@
           for (const [p, data] of Object.entries(backup.photos || {})) { try { map[p] = await savePhoto(data); } catch {} }
           state = migrate(backup.state);
           state.entries.forEach(e => { e.photos = (e.photos || []).map(p => map[p] || p); });
-          ensureResignEntry(); save(); closeSheet(); render(); toast('Backup eingespielt');
+          ensureResignEntry(); save(); applyLook(true); closeSheet(); render(); toast('Backup eingespielt');
         };
       } catch (err) { toast(err.message); }
     };
@@ -1029,12 +1067,88 @@
     if (r.success) document.getElementById('lock')?.remove();
   }
 
+  /* ---------- Aussehen ---------- */
+  const darkMq = matchMedia('(prefers-color-scheme: dark)');
+  function applyLook(animate) {
+    const s = state.settings, root = document.documentElement;
+    const theme = THEMES[s.theme] ? s.theme : 'system';
+    if (animate && motionOn()) { root.classList.add('html-theme-anim'); setTimeout(() => root.classList.remove('html-theme-anim'), 500); }
+    root.dataset.theme = theme;
+    root.dataset.motion = s.motion ? 'on' : 'off';
+    try { localStorage.setItem('wdid.look', JSON.stringify({ theme, motion: s.motion })); } catch {}
+    const dark = theme === 'system' ? darkMq.matches : !!THEMES[theme].dark;
+    document.querySelector('meta[name="theme-color"]').content = getComputedStyle(root).getPropertyValue('--bg').trim() || '#F3F4F1';
+    if (StatusBar) StatusBar.setStyle({ style: dark ? 'DARK' : 'LIGHT' }).catch(() => {});
+  }
+  darkMq.addEventListener?.('change', () => state.settings.theme === 'system' && applyLook(true));
+
+  /* ---------- Effekte: kleine Belohnungen fürs Abhaken ---------- */
+  const reduceMq = matchMedia('(prefers-reduced-motion: reduce)');
+  const motionOn = () => state.settings.motion && !reduceMq.matches;
+  const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  function haptic(kind) {
+    if (!Haptics || !state.settings.haptics) return;
+    const p = kind === 'success' ? Haptics.notification({ type: 'SUCCESS' }) : kind === 'select' ? Haptics.selectionChanged() : Haptics.impact({ style: kind === 'medium' ? 'MEDIUM' : 'LIGHT' });
+    p.catch(() => {});
+  }
+  function fxLayer() {
+    let fx = document.getElementById('fx');
+    if (!fx) { fx = document.createElement('div'); fx.id = 'fx'; fx.setAttribute('aria-hidden', 'true'); document.body.appendChild(fx); }
+    return fx;
+  }
+  function particle(x, y, { color, size, bit, dx, dy, rot = 0, dur, gravity = 0 }) {
+    const el = document.createElement('i');
+    if (bit) el.className = 'bit';
+    el.style.setProperty('--c', color); if (size) el.style.setProperty('--s', size + 'px');
+    fxLayer().appendChild(el);
+    const a = el.animate([
+      { transform: `translate(${x}px, ${y}px) rotate(0deg) scale(1)`, opacity: 1 },
+      { transform: `translate(${x + dx * .7}px, ${y + dy * .7}px) rotate(${rot * .7}deg) scale(1)`, opacity: 1, offset: .6 },
+      { transform: `translate(${x + dx}px, ${y + dy + gravity}px) rotate(${rot}deg) scale(.6)`, opacity: 0 },
+    ], { duration: dur, easing: 'cubic-bezier(.2,.7,.3,1)' });
+    a.onfinish = () => el.remove();
+  }
+  // Funken rund um einen Haken
+  function burst(el, n = 10) {
+    if (!motionOn() || !el) return;
+    const r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+    const colors = [css('--accent'), css('--accent'), css('--work'), css('--due')];
+    for (let i = 0; i < n; i++) {
+      const ang = (i / n) * Math.PI * 2 + Math.random() * .4, d = 22 + Math.random() * 18;
+      particle(x - 3, y - 3, { color: colors[i % colors.length], size: 4 + Math.random() * 3, dx: Math.cos(ang) * d, dy: Math.sin(ang) * d, dur: 520 + Math.random() * 200 });
+    }
+  }
+  // Konfetti, wenn eine Liste oder der Tag geschafft ist
+  function confetti() {
+    if (!motionOn()) return;
+    const w = innerWidth, h = innerHeight;
+    const colors = [css('--accent'), css('--work'), css('--due'), css('--accent-soft'), css('--fg')];
+    for (let i = 0; i < 70; i++) {
+      const fromLeft = i % 2 === 0, x = fromLeft ? -10 : w + 10, y = h * .62;
+      particle(x, y, { bit: true, color: colors[i % colors.length], dx: (fromLeft ? 1 : -1) * (w * .25 + Math.random() * w * .55), dy: -(h * .35 + Math.random() * h * .35),
+        gravity: h * .45, rot: (Math.random() - .5) * 900, dur: 1300 + Math.random() * 900 });
+    }
+  }
+  // Fortschrittsbalken wachsen vom alten zum neuen Stand, auch über ein Neuzeichnen hinweg
+  const progressMemo = {};
+  const progressBar = (key, done, total) => {
+    const v = total ? done / total : 0;
+    return `<div class="progress${v >= 1 ? ' full' : ''}" role="progressbar" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${done}"><i data-prog="${esc(key)}" data-v="${v}" style="width:${(progressMemo[key] ?? 0) * 100}%"></i></div>`;
+  };
+  function settleProgress() {
+    const bars = app.querySelectorAll('[data-prog]');
+    if (!bars.length) return;
+    requestAnimationFrame(() => requestAnimationFrame(() => bars.forEach(b => { b.style.width = (+b.dataset.v * 100) + '%'; progressMemo[b.dataset.prog] = +b.dataset.v; })));
+  }
+  const dayOpenCount = () => { const m = dayModel(today()); return [...m.overdue, ...m.todays].filter(e => !e.done && !isHiddenByWork(e)).length; };
+
   /* ---------- Toast ---------- */
   let toastTimer;
   function toast(msg) {
     const r = document.getElementById('toastRoot');
     r.innerHTML = `<div class="toast" role="status">${esc(msg)}</div>`;
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => r.innerHTML = '', 2600);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { const t = r.firstElementChild; if (!t) return; t.classList.add('out'); toastTimer = setTimeout(() => r.innerHTML = '', 260); }, 2600);
   }
 
   /* ---------- Render & Ereignisse ---------- */
@@ -1042,11 +1156,20 @@
   let tab = (location.hash || '').slice(1);
   if (!TABS.includes(tab)) tab = 'heute';
   const app = document.getElementById('app');
-  function render() {
+  let enterTimer;
+  function render({ enter = false } = {}) {
     app.innerHTML = { heute: viewHeute, orte: viewOrte, papiere: viewPapiere, verlauf: viewVerlauf, alles: viewAlles }[tab]();
     document.querySelectorAll('nav.tabs button').forEach(b => b.dataset.tab === tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
+    // Einblenden nur beim Tabwechsel, nicht bei jedem Neuzeichnen
+    clearTimeout(enterTimer);
+    if (enter && motionOn()) {
+      [...app.children].forEach((c, i) => c.style.setProperty('--i', Math.min(i, 10)));
+      app.classList.remove('enter'); void app.offsetWidth; app.classList.add('enter');
+      enterTimer = setTimeout(() => app.classList.remove('enter'), 900);
+    } else app.classList.remove('enter');
+    settleProgress();
   }
-  const goTab = t => { tab = t; render(); window.scrollTo(0, 0); };
+  const goTab = t => { if (t !== tab) haptic('select'); tab = t; render({ enter: true }); window.scrollTo(0, 0); };
   document.querySelector('nav.tabs').onclick = ev => { const b = ev.target.closest('button'); if (b) goTab(b.dataset.tab); };
   document.getElementById('fab').onclick = () => openSheet(null, tab === 'papiere' ? { type: { vertraege: 'contract', dokumente: 'document', warten: 'waiting' }[papersTab] || 'deadline' } : tab === 'orte' ? { type: 'place' } : {});
 
@@ -1055,7 +1178,20 @@
     const el = ev.target.closest('[data-done],[data-edit],[data-goto],[data-filter],[data-pin],[data-clear],[data-copylist],[data-addlist],[data-newlist],[data-editplace],[data-suggest],[data-paper],[data-case],[data-newtype],[data-review],#copyDay,#showWork,#locate,#reset,#addPlace,#askAlways,#scan,#newCase,#openSettings');
     if (!el) return;
     const d = el.dataset;
-    if (d.done) return complete(state.entries.find(e => e.id === d.done));
+    if (d.done) {
+      const e = state.entries.find(x => x.id === d.done), row = el.closest('.item');
+      if (!e || row?.classList.contains('completing')) return;
+      if (e.done) return complete(e);
+      const openBefore = dayOpenCount();
+      haptic('light');
+      const finish = () => {
+        complete(e);
+        if (openBefore > 0 && dayOpenCount() === 0 && tab === 'heute') { haptic('success'); confetti(); setTimeout(() => toast('Alles für heute erledigt. Stark.'), 250); }
+      };
+      if (!motionOn()) return finish();
+      row.classList.add('completing'); burst(el, 12);
+      return setTimeout(finish, 520);
+    }
     if (d.edit) return openSheet(state.entries.find(e => e.id === d.edit));
     if (d.goto) return goTab(d.goto);
     if (d.filter) { filter = d.filter; return render(); }
@@ -1082,12 +1218,24 @@
     }
     if (el.id === 'reset') {
       if (!resetArmed) { resetArmed = true; el.textContent = 'Tippe nochmal zum Bestätigen'; return; }
-      resetArmed = false; state = blank(); ensureResignEntry(); save(); toast('Gelöscht'); render();
+      resetArmed = false; const look = { theme: state.settings.theme, motion: state.settings.motion, haptics: state.settings.haptics }; state = blank(); Object.assign(state.settings, look); ensureResignEntry(); save(); toast('Gelöscht'); render();
     }
   });
+  let listTimer;
   app.addEventListener('change', ev => {
     const c = ev.target;
-    if (c.dataset.list) { checkItem(state.entries.find(e => e.id === c.dataset.list), +c.dataset.idx, c.checked); render(); }
+    if (c.dataset.list) {
+      const list = state.entries.find(e => e.id === c.dataset.list);
+      checkItem(list, +c.dataset.idx, c.checked);
+      if (!c.checked) return render();
+      const allDone = list.items.every(i => i.done);
+      haptic(allDone ? 'success' : 'light');
+      if (allDone) { confetti(); toast(`${list.title}: alles im Wagen`); }
+      if (!motionOn()) return render();
+      c.closest('li')?.classList.add('pop'); burst(c, 8);
+      // kurz stehen lassen, dann rutscht der Punkt nach „Im Wagen“
+      clearTimeout(listTimer); listTimer = setTimeout(render, 420);
+    }
   });
   app.addEventListener('input', ev => {
     const keep = id => { const pos = ev.target.selectionStart; render(); const q = document.getElementById(id); q.focus(); q.setSelectionRange(pos, pos); };
@@ -1119,8 +1267,9 @@
   });
 
   ensureResignEntry();
+  applyLook(false);
   await refreshLocationStatus();
   if (native) save();
-  render();
+  render({ enter: true });
   lockIfNeeded(true);
 })();

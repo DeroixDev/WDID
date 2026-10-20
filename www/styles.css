@@ -21,14 +21,14 @@
   --f-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --r: 14px;
 }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --bg: #161A18; --surface: #1F2421; --line: #2E3531; --fg: #E7EAE6; --muted: #949C96;
-  --accent: #8DB5A6; --accent-soft: #263A33; --due: #E09A83; --due-soft: #3A2620;
-  --work: #9FB3D1; --work-soft: #253041; color-scheme: dark } }
-:root[data-theme="dark"] {
-  --bg: #161A18; --surface: #1F2421; --line: #2E3531; --fg: #E7EAE6; --muted: #949C96;
-  --accent: #8DB5A6; --accent-soft: #263A33; --due: #E09A83; --due-soft: #3A2620;
-  --work: #9FB3D1; --work-soft: #253041; color-scheme: dark }
+/* Themes: „System“ folgt dem iPhone (Birke hell, Nacht dunkel), die anderen sind fest */
+@media (prefers-color-scheme: dark) { :root:not([data-theme]), :root[data-theme="system"] { --bg: #161A18; --surface: #1F2421; --line: #2E3531; --fg: #E7EAE6; --muted: #949C96; --accent: #8DB5A6; --accent-soft: #263A33; --due: #E09A83; --due-soft: #3A2620; --work: #9FB3D1; --work-soft: #253041; color-scheme: dark; } }
+:root[data-theme="nacht"] { --bg: #161A18; --surface: #1F2421; --line: #2E3531; --fg: #E7EAE6; --muted: #949C96; --accent: #8DB5A6; --accent-soft: #263A33; --due: #E09A83; --due-soft: #3A2620; --work: #9FB3D1; --work-soft: #253041; color-scheme: dark; }
+:root[data-theme="sand"] { --bg: #F5F0E8; --surface: #FFFCF7; --line: #E6DED2; --fg: #2A241E; --muted: #7A7065; --accent: #86663D; --accent-soft: #EFE4D3; --due: #B0483A; --due-soft: #F5DDD6; --work: #556B7D; --work-soft: #E0E6EB; }
+:root[data-theme="fjord"] { --bg: #EEF2F4; --surface: #FFFFFF; --line: #D9E0E5; --fg: #1C2530; --muted: #66727D; --accent: #2F5E80; --accent-soft: #D8E5EE; --due: #A8553F; --due-soft: #F2E1DA; --work: #5B5F8A; --work-soft: #E2E3F0; }
+:root[data-theme="heide"] { --bg: #F4F1F4; --surface: #FFFFFF; --line: #E4DEE4; --fg: #261F27; --muted: #756C76; --accent: #6E4E78; --accent-soft: #EAE0EE; --due: #A8553F; --due-soft: #F2E1DA; --work: #4F6480; --work-soft: #DFE5EE; }
+:root[data-theme="polar"] { --bg: #10151C; --surface: #18202A; --line: #263140; --fg: #E4E9F0; --muted: #8D99A8; --accent: #8FB8DE; --accent-soft: #1F3347; --due: #E8A08A; --due-soft: #3A2621; --work: #B4A7E0; --work-soft: #2A2742; color-scheme: dark; }
+:root[data-theme="oled"] { --bg: #000000; --surface: #0F1110; --line: #222624; --fg: #ECEFEC; --muted: #8E958F; --accent: #93C9B4; --accent-soft: #14261F; --due: #F0A28A; --due-soft: #2E1A14; --work: #A5B9D8; --work-soft: #18202E; color-scheme: dark; }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 :root { padding-top: env(safe-area-inset-top, 0px); }
@@ -88,7 +88,11 @@ section.group { margin-bottom: 30px; }
 .checklist { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; }
 .checklist li { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); }
 .checklist li.got span { text-decoration: line-through; color: var(--muted); }
-.checklist input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.checklist input { appearance: none; -webkit-appearance: none; margin: 0; width: 22px; height: 22px; border-radius: 7px; border: 1.5px solid var(--line); background: var(--surface); flex: none; position: relative; cursor: pointer; }
+.checklist input::after { content: ""; position: absolute; left: 6.5px; top: 2.5px; width: 5px; height: 10px; border: solid var(--bg); border-width: 0 2.2px 2.2px 0; transform: rotate(45deg) scale(0); }
+.checklist input:checked { background: var(--accent); border-color: var(--accent); }
+.checklist input:checked::after { transform: rotate(45deg) scale(1); }
+.checklist label { cursor: pointer; }
 .row-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .btn { border: 1px solid var(--line); background: var(--surface); padding: 8px 14px; border-radius: 10px; font-size: 14px; font-weight: 500; }
 .btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
@@ -136,10 +140,6 @@ nav.tabs svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stro
 .hint { font-size: 13px; color: var(--muted); }
 
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(150px + env(safe-area-inset-bottom, 0px)); background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 30; }
-@media (prefers-reduced-motion: no-preference) {
-  .sheet { animation: up .22s ease-out; }
-  @keyframes up { from { transform: translateY(24px); } to { transform: none; } }
-}
 
 /* ---------- Ergänzungen v2 ---------- */
 .icon-btn { background: none; border: 0; padding: 6px; color: var(--muted); display: grid; place-items: center; }
@@ -191,3 +191,87 @@ details.ocr pre { white-space: pre-wrap; font-family: var(--f-mono); font-size: 
 .banner .btn { background: var(--surface); }
 .link { background: none; border: 0; padding: 0; color: var(--accent); font-size: 14px; text-decoration: underline; text-underline-offset: 3px; }
 .row-actions .btn.small { padding: 6px 10px; font-size: 13px; }
+
+/* ---------- Aussehen: Theme-Auswahl ---------- */
+.themes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.themes button { border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 10px 4px 8px; font-size: 12px; font-weight: 500; display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--fg); }
+.themes button[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1.5px var(--accent) inset; }
+.swatch { width: 34px; height: 34px; border-radius: 50%; border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent); background: linear-gradient(135deg, var(--s-bg) 0 50%, var(--s-ac) 50% 100%); position: relative; }
+.swatch::after { content: ""; position: absolute; inset: 10px; border-radius: 50%; background: var(--s-sf); }
+.swatch.sys { background: linear-gradient(135deg, #F3F4F1 0 50%, #161A18 50% 100%); }
+.swatch.sys::after { background: linear-gradient(135deg, #3D6357 0 50%, #8DB5A6 50% 100%); }
+
+/* Fortschritt */
+.progress { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.progress > i { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--accent); }
+.progress.full > i { background: var(--accent); }
+.day-progress { display: flex; align-items: center; gap: 10px; margin: -14px 0 26px; font-size: 13px; color: var(--muted); }
+.day-progress .progress { flex: 1; }
+.day-progress b { font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+
+/* Effekt-Ebene für Funken und Konfetti */
+#fx { position: fixed; inset: 0; pointer-events: none; z-index: 45; overflow: hidden; }
+#fx i { position: absolute; left: 0; top: 0; width: var(--s, 6px); height: var(--s, 6px); border-radius: 50%; background: var(--c); will-change: transform, opacity; }
+#fx i.bit { border-radius: 2px; width: 7px; height: 11px; }
+
+/* ---------- Bewegung ----------
+   Alles weich und kurz, nichts blinkt. Aus bei „Bewegung reduzieren“ (iOS) oder Schalter in den Einstellungen. */
+:root { --ease: cubic-bezier(.22, .8, .24, 1); --spring: cubic-bezier(.34, 1.56, .64, 1); }
+.btn, .chip, .pill, .types button, .themes button, .seg button, .icon-btn, .check, nav.tabs button, .fab { transition: transform .18s var(--ease), background-color .2s, color .2s, border-color .2s, box-shadow .2s; }
+.btn:active, .chip:active, .types button:active, .themes button:active, .seg button:active, .icon-btn:active, button.pill:active { transform: scale(.96); }
+.fab:active { transform: scale(.9); }
+.check:active { transform: scale(.88); }
+.switch, .switch::after { transition: background-color .25s var(--ease), transform .3s var(--spring); }
+.checklist input { transition: background-color .2s, border-color .2s, transform .15s var(--ease); }
+.checklist input::after { transition: transform .32s var(--spring); }
+.checklist input:active { transform: scale(.88); }
+.checklist li span { transition: color .25s; }
+.progress > i { transition: width .7s var(--ease); }
+.html-theme-anim, .html-theme-anim *, .html-theme-anim *::before, .html-theme-anim *::after { transition: background-color .45s ease, color .45s ease, border-color .45s ease !important; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes sheetDown { from { transform: none; } to { transform: translateY(100%); } }
+@keyframes fadeOut { to { opacity: 0; } }
+@keyframes tabPop { 0% { transform: scale(1); } 40% { transform: scale(1.18) translateY(-1px); } 100% { transform: scale(1); } }
+@keyframes checkPop { 0% { transform: scale(1); } 35% { transform: scale(.8); } 70% { transform: scale(1.18); } 100% { transform: scale(1); } }
+@keyframes ring { from { opacity: .55; transform: scale(1); } to { opacity: 0; transform: scale(1.8); } }
+@keyframes draw { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
+@keyframes strike { from { background-size: 0 1.5px; } to { background-size: 100% 1.5px; } }
+@keyframes toastIn { from { opacity: 0; transform: translate(-50%, 12px) scale(.96); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes toastOut { to { opacity: 0; transform: translate(-50%, 8px); } }
+@keyframes fabIn { from { opacity: 0; transform: scale(.6) rotate(-45deg); } to { opacity: 1; transform: none; } }
+@keyframes glow { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
+
+.app.enter > * { animation: rise .42s var(--ease) both; animation-delay: calc(var(--i, 0) * 40ms); }
+.scrim { animation: fade .25s ease both; }
+.sheet { animation: sheetUp .38s cubic-bezier(.2, .9, .3, 1) both; }
+#sheetRoot.closing .scrim { animation: fadeOut .22s ease forwards; }
+#sheetRoot.closing .sheet { animation: sheetDown .24s cubic-bezier(.4, 0, .9, .6) forwards; }
+#sheetRoot.closing { pointer-events: none; }
+.toast { animation: toastIn .32s var(--spring) both; }
+.toast.out { animation: toastOut .25s ease forwards; }
+.fab { animation: fabIn .5s var(--spring) .15s both; }
+nav.tabs button[aria-current="page"] svg { animation: tabPop .4s var(--spring); }
+.viewer { animation: fade .2s ease both; }
+.banner, .card.accent { animation: rise .4s var(--ease) both; }
+.card.accent { animation: glow 1.6s ease-out 2; }
+
+/* Abhaken: Kreis federt, Haken zeichnet sich, Titel wird durchgestrichen */
+.check { position: relative; }
+.check svg path { stroke-dasharray: 24; stroke-dashoffset: 0; }
+.item.completing .check { background: var(--accent); border-color: var(--accent); animation: checkPop .42s var(--spring); }
+.item.completing .check svg { opacity: 1; stroke: var(--bg); }
+.item.completing .check svg path { animation: draw .3s .08s var(--ease) both; }
+.item.completing .check::after { content: ""; position: absolute; inset: -2px; border-radius: 50%; border: 2px solid var(--accent); animation: ring .5s ease-out forwards; }
+.item.completing .title { width: fit-content; color: var(--muted); background: linear-gradient(currentColor, currentColor) no-repeat 0 55% / 0 1.5px; animation: strike .3s .1s var(--ease) forwards; }
+.item.completing { transition: opacity .3s .35s; opacity: .55; }
+.checklist li.pop input { animation: checkPop .38s var(--spring); }
+.checklist li.pop span { color: var(--muted); }
+
+/* Ruhig-Modus */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+:root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { animation-duration: .01ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
