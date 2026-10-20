@@ -5,7 +5,8 @@
   "description": "WDID – What Did I Do. Offline-Alltags-App für iPhone.",
   "scripts": {
     "build-info": "node scripts/build-info.mjs",
-    "sync": "npm run build-info && cap sync ios"
+    "sync": "npm run build-info && cap sync ios",
+    "postinstall": "node scripts/build-info.mjs && cap sync ios"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.2",
