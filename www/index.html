@@ -56,6 +56,7 @@ h1 { font-size: 30px; font-weight: 600; letter-spacing: -.02em; margin: 2px 0 0;
 .summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; }
 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 500; background: var(--surface); border: 1px solid var(--line); color: var(--fg); }
 .pill.due { background: var(--due-soft); border-color: transparent; color: var(--due); }
+.summary button.pill { cursor: pointer; color: var(--muted); }
 .pill.ok { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
 
 section.group { margin-bottom: 30px; }
@@ -134,7 +135,8 @@ nav.tabs svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stro
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .seg button { border: 0; background: var(--surface); padding: 8px 14px; font-size: 14px; }
 .seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
-.sheet-actions { display: flex; gap: 10px; justify-content: space-between; }
+.sheet-actions { display: flex; gap: 10px; }
+.sheet-actions .btn.primary { margin-left: auto; }
 .sheet-actions .btn { padding: 12px 18px; font-size: 15px; }
 .hint { font-size: 13px; color: var(--muted); }
 
@@ -227,6 +229,7 @@ nav.tabs svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stro
   const native = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
   const Prefs = native ? Cap.registerPlugin('Preferences') : null;
   const Notes = native ? Cap.registerPlugin('LocalNotifications') : null;
+  const Clip = native ? Cap.registerPlugin('Clipboard') : null;
 
   // Auf dem iPhone liegen die Daten in den App-Einstellungen (UserDefaults, im iCloud-Backup enthalten),
   // localStorage dient nur als Zweitkopie bzw. im Browser als einziger Speicher.
@@ -389,7 +392,7 @@ nav.tabs svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stro
     let html = `<header class="top"><div><div class="weekday">${d.toLocaleDateString('de-DE', { weekday: 'long' })}</div>
       <h1>${d.toLocaleDateString('de-DE', { day: 'numeric', month: 'long' })}</h1></div><div class="brand">WDID</div></header>
       ${state.sample ? '<p class="note">Beispieldaten. Sie verschwinden, sobald du unter „Alles“ auf „Beispiele löschen“ tippst.</p>' : ''}
-      <div class="summary">${pills.join('')}</div>`;
+      <div class="summary">${pills.join('')}<button class="pill" id="copyDay" type="button">Tag kopieren</button></div>`;
 
     if (m.overdue.length) html += group('Liegengeblieben', m.overdue.map(e => itemRow(e, { showDate: true })).join(''));
     html += group('Heute', m.todays.length ? m.todays.map(e => itemRow(e)).join('') : '<div class="empty">Nichts geplant. Mit + legst du etwas an.</div>');
@@ -429,6 +432,7 @@ nav.tabs svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stro
           <ul class="checklist">${l.items.map((it, i) => `<li class="${it.done ? 'got' : ''}"><input type="checkbox" id="ci-${l.id}-${i}" data-list="${l.id}" data-idx="${i}" ${it.done ? 'checked' : ''}><span><label for="ci-${l.id}-${i}">${esc(it.text)}</label></span></li>`).join('')}</ul>`;
       });
       html += `<div class="row-actions"><button class="btn" data-pin="${p.id}">Standort hier speichern</button>
+        <button class="btn ghost" data-copyplace="${p.id}">Kopieren</button>
         <button class="btn ghost" data-clear="${p.id}">Abgehakte entfernen</button></div></div>`;
     });
     return html;
@@ -491,6 +495,7 @@ nav.tabs svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stro
         <p class="hint" id="formError" hidden></p>
         <div class="sheet-actions">
           ${isNew ? '<button class="btn ghost" data-close>Abbrechen</button>' : `<button class="btn ghost" id="del">${confirmDel ? 'Wirklich löschen?' : 'Löschen'}</button>`}
+          <button class="btn" id="copyBtn">Kopieren</button>
           <button class="btn primary" id="saveBtn">${isNew ? 'Speichern' : 'Fertig'}</button>
         </div>
       </div></div>`;
@@ -519,6 +524,7 @@ nav.tabs svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stro
       if (b.hasAttribute('data-close')) return close();
       if (b.dataset.type) { read(); e.type = b.dataset.type; if (e.type === 'deadline' && (!e.date || e.date <= today())) e.date = iso(addDays(new Date(), 14)); draw(); return; }
       if (b.dataset.ctx) { read(); e.context = b.dataset.ctx; draw(); return; }
+      if (b.id === 'copyBtn') { read(); copyText(entryText(e), 'Eintrag kopiert'); return; }
       if (b.id === 'del') { if (!confirmDel) { read(); confirmDel = true; draw(); return; } state.entries = state.entries.filter(x => x.id !== e.id); save(); close(); toast('Gelöscht'); render(); return; }
       if (b.id === 'saveBtn') {
         read();
@@ -557,6 +563,53 @@ nav.tabs svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stro
     if (open) toast(`Du bist bei ${p.name}: ${open} Punkte offen`);
   }
 
+  /* ---------- Als Text kopieren ---------- */
+  const longDate = d => parse(d).toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const shortDate = d => parse(d).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  function entryText(e) {
+    const t = today(), L = [];
+    const place = state.places.find(p => p.id === e.placeId);
+    L.push(`${TYPE[e.type].label}: ${e.title || '(ohne Titel)'}`);
+    if (e.type === 'deadline' && e.date) {
+      const left = daysBetween(t, e.date);
+      L.push(`Frist bis: ${longDate(e.date)} (${left < 0 ? `${-left} Tage überfällig` : left === 0 ? 'heute' : left === 1 ? 'morgen' : `noch ${left} Tage`})`);
+      if (e.received || e.source) L.push(`Eingegangen: ${[e.received && shortDate(e.received), e.source && `per ${e.source}`].filter(Boolean).join(' ')}`);
+      if (e.leadDays) L.push(`Erinnerung: ${e.leadDays} ${e.leadDays === 1 ? 'Tag' : 'Tage'} vorher`);
+    } else if (e.type !== 'place' && e.date) {
+      L.push(`Wann: ${longDate(e.date)}${e.time ? `, ${e.time} Uhr` : ''}`);
+    }
+    if (e.repeat && e.repeat !== 'none') L.push(`Wiederholung: ${{ daily: 'täglich', weekly: 'wöchentlich', monthly: 'monatlich' }[e.repeat]}`);
+    if (e.type === 'place') {
+      if (place) L.push(`Ort: ${place.name}`);
+      if (e.items.length) { L.push('Liste:'); e.items.forEach(i => L.push(`${i.done ? '[x]' : '[ ]'} ${i.text}`)); }
+    }
+    L.push(`Bereich: ${e.context === 'arbeit' ? 'Arbeit' : 'Privat'}`);
+    L.push(`Status: ${e.done ? 'erledigt' : 'offen'}`);
+    if (e.notes) { L.push('Details:'); L.push(e.notes); }
+    return L.join('\n');
+  }
+  function dayText() {
+    const m = todayModel();
+    const parts = [`WDID – ${longDate(today())}`];
+    const block = (title, list) => { if (list.length) parts.push(`\n== ${title} ==\n` + list.map(entryText).join('\n\n')); };
+    block('Liegengeblieben', m.overdue); block('Heute', m.todays); block('Fristen in Sicht', m.upcoming); block('Ortslisten', m.lists);
+    return parts.join('\n');
+  }
+  async function copyText(text, label = 'Kopiert') {
+    try {
+      if (Clip) await Clip.write({ string: text });
+      else await navigator.clipboard.writeText(text);
+      toast(label);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand && document.execCommand('copy');
+      ta.remove();
+      toast(ok ? label : 'Kopieren hat nicht geklappt');
+    }
+  }
+
   /* ---------- Toast ---------- */
   let toastTimer;
   function toast(msg) {
@@ -575,13 +628,15 @@ nav.tabs svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stro
   document.getElementById('fab').onclick = () => openSheet(null);
   let resetArmed = false;
   app.addEventListener('click', ev => {
-    const el = ev.target.closest('[data-done],[data-edit],[data-goto],[data-filter],[data-pin],[data-clear],#locate,#reset');
+    const el = ev.target.closest('[data-done],[data-edit],[data-goto],[data-filter],[data-pin],[data-clear],[data-copyplace],#copyDay,#locate,#reset');
     if (!el) return;
     if (el.dataset.done) return complete(state.entries.find(e => e.id === el.dataset.done));
     if (el.dataset.edit) return openSheet(state.entries.find(e => e.id === el.dataset.edit));
     if (el.dataset.goto) { tab = el.dataset.goto; return render(); }
     if (el.dataset.filter) { filter = el.dataset.filter; return render(); }
     if (el.id === 'locate') return locate();
+    if (el.id === 'copyDay') return copyText(dayText(), 'Tag kopiert');
+    if (el.dataset.copyplace) return copyText(state.entries.filter(e => e.type === 'place' && e.placeId === el.dataset.copyplace).map(entryText).join('\n\n'), 'Liste kopiert');
     if (el.dataset.pin) return locate(pos => { const p = state.places.find(p => p.id === el.dataset.pin); p.lat = pos.lat; p.lng = pos.lng; save(); toast(`Standort für ${p.name} gespeichert`); });
     if (el.dataset.clear) { state.entries.filter(e => e.type === 'place' && e.placeId === el.dataset.clear).forEach(l => l.items = l.items.filter(i => !i.done)); save(); return render(); }
     if (el.id === 'reset') {

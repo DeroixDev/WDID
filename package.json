@@ -8,6 +8,7 @@
     "sync": "npm run build-info && cap sync ios"
   },
   "dependencies": {
+    "@capacitor/clipboard": "^8.0.1",
     "@capacitor/core": "8.3.1",
     "@capacitor/ios": "8.3.1",
     "@capacitor/local-notifications": "8.3.1",
