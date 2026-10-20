@@ -23,8 +23,9 @@ fi
 
 # iCloud legt bei Sync-Konflikten Kopien wie "Datei 2.swift" an, die den Build kaputt machen
 case "$PWD" in
+  *.nosync*) ;;
   "$HOME/Desktop"*|"$HOME/Documents"*|"$HOME/Library/Mobile Documents"*)
-    echo "Hinweis: Der Ordner liegt evtl. in iCloud. Besser nach ~/Developer verschieben (siehe README)." ;;
+    echo "Hinweis: Der Ordner liegt evtl. in iCloud. Ordnername mit .nosync am Ende verhindert das (siehe README)." ;;
 esac
 DUPES="$(find . -path ./.git -prune -o -name '* 2.*' -print 2>/dev/null | grep -v '^./node_modules' | head -5 || true)"
 [ -z "$DUPES" ] || fail "Doppelte Dateien gefunden (von iCloud angelegt):
