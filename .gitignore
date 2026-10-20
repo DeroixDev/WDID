@@ -3,4 +3,3 @@ build/
 .wdid-team
 .DS_Store
 www/build-info.js
-www/vendor/
