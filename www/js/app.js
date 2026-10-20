@@ -1077,7 +1077,9 @@
     root.dataset.motion = s.motion ? 'on' : 'off';
     try { localStorage.setItem('wdid.look', JSON.stringify({ theme, motion: s.motion })); } catch {}
     const dark = theme === 'system' ? darkMq.matches : !!THEMES[theme].dark;
-    document.querySelector('meta[name="theme-color"]').content = getComputedStyle(root).getPropertyValue('--bg').trim() || '#F3F4F1';
+    const bg = getComputedStyle(root).getPropertyValue('--bg').trim() || '#F3F4F1';
+    document.querySelector('meta[name="theme-color"]').content = bg;
+    if (Native) Native.setBackground({ color: bg }).catch(() => {});
     if (StatusBar) StatusBar.setStyle({ style: dark ? 'DARK' : 'LIGHT' }).catch(() => {});
   }
   darkMq.addEventListener?.('change', () => state.settings.theme === 'system' && applyLook(true));

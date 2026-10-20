@@ -86,8 +86,20 @@ public class WDIDNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "requestAlwaysLocation", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "recognizeText", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "authenticate", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "biometryType", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "biometryType", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setBackground", returnType: CAPPluginReturnPromise)
     ]
+
+    /// Theme-Farbe als Hex (#RRGGBB) für den nativen Hintergrund
+    @objc func setBackground(_ call: CAPPluginCall) {
+        let hex = (call.getString("color") ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        guard hex.count == 6, let v = UInt32(hex, radix: 16) else { return call.reject("Ungültige Farbe") }
+        let color = UIColor(red: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255, blue: CGFloat(v & 0xFF) / 255, alpha: 1)
+        DispatchQueue.main.async {
+            (self.bridge?.viewController as? MainViewController)?.applyBackground(color)
+            call.resolve()
+        }
+    }
 
     @objc func setGeofences(_ call: CAPPluginCall) {
         let regions = (call.getArray("regions") ?? []).compactMap { value -> [String: Any]? in
