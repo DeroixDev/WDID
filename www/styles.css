@@ -252,7 +252,7 @@ details.ocr pre { white-space: pre-wrap; font-family: var(--f-mono); font-size: 
 .scrim { animation: fade .25s ease both; }
 .sheet { animation: sheetUp .38s cubic-bezier(.2, .9, .3, 1) both; }
 #sheetRoot.closing .scrim { animation: fadeOut .22s ease forwards; }
-#sheetRoot.closing .sheet { animation: sheetDown .24s cubic-bezier(.4, 0, .9, .6) forwards; }
+#sheetRoot.closing .sheet, #sheetRoot.closing .sheet.still { animation: sheetDown .24s cubic-bezier(.4, 0, .9, .6) forwards; }
 #sheetRoot.closing { pointer-events: none; }
 .toast { animation: toastIn .32s var(--spring) both; }
 .toast.out { animation: toastOut .25s ease forwards; }
@@ -349,7 +349,7 @@ label.inline.hint input { margin-top: 3px; }
 /* ---------- Eintrag: simple Ansicht, Rest zum Ausklappen ---------- */
 /* Felder stehen untereinander, nichts quetscht sich nebeneinander */
 .two { grid-template-columns: 1fr; gap: 16px; }
-.sheet .still { animation: none; }
+.sheet.still { animation: none; }
 .secs { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
 details.sec { border-bottom: 1px solid var(--line); }
 details.sec > summary, details.more > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 13px 2px; font-size: 15px; font-weight: 500; -webkit-tap-highlight-color: transparent; }
@@ -417,3 +417,10 @@ input[type="date"]::-webkit-date-and-time-value, input[type="time"]::-webkit-dat
 .sheet.dragging { animation: none; transition: none; }
 .sheet { overflow-x: hidden; }
 .sheet .inner, .field { min-width: 0; }
+
+/* Tabwechsel nach links/rechts */
+@keyframes slideIn { from { opacity: 0; transform: translateX(calc(var(--dir, 1) * 36px)); } to { opacity: 1; transform: none; } }
+@keyframes slideOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(calc(var(--dir, 1) * -36px)); } }
+.app.slide-in { animation: slideIn .3s cubic-bezier(.2, .8, .2, 1) .12s both; }
+.app-ghost { z-index: 1; animation: slideOut .15s cubic-bezier(.4, 0, 1, 1) forwards; }
+.app.area-in > :not(.areas) { animation: slideIn .32s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(var(--i, 0) * 25ms); }

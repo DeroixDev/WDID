@@ -261,7 +261,8 @@
   function applyArea() { document.documentElement.dataset.area = area(); }
   function setArea(a) {
     if (a === area()) return;
-    state.settings.area = a; applyArea(); haptic('select'); save(); render({ enter: true });
+    const order = ['privat', 'arbeit', 'alle'], dir = Math.sign(order.indexOf(a) - order.indexOf(area()));
+    state.settings.area = a; applyArea(); haptic('select'); save(); render({ enter: 'area', dir });
   }
 
   function dayModel(day, { all = false, ctx = null } = {}) {
@@ -1047,7 +1048,7 @@
       const top = sh.getBoundingClientRect().top, y = ev.touches[0].clientY;
       const inHandle = y - top < 64 || (sh.scrollTop <= 0 && ev.target.closest('.sheet-head'));
       if (!inHandle || ev.touches.length > 1 || ev.target.closest('input, select, textarea')) return;
-      y0 = y; t0 = Date.now(); dy = 0;
+      y0 = y; t0 = Date.now(); dy = 0; sh.classList.add('still');
     }, { passive: true });
     sh.addEventListener('touchmove', ev => {
       if (y0 === null) return;
@@ -2106,22 +2107,39 @@
   if (!TABS.includes(tab)) tab = 'heute';
   const app = document.getElementById('app');
   let enterTimer;
-  function render({ enter = false } = {}) {
+  function render({ enter = false, dir = 0 } = {}) {
+    // Tabwechsel: alte Seite gleitet zur Seite raus, neue von der anderen Seite rein
+    const slide = enter === 'tab' && dir && motionOn();
+    if (slide) {
+      document.querySelectorAll('.app-ghost').forEach(g => g.remove());
+      const r = app.getBoundingClientRect(), ghost = app.cloneNode(true);
+      ghost.removeAttribute('id'); ghost.classList.remove('enter', 'slide-in', 'area-in'); ghost.classList.add('app-ghost'); ghost.setAttribute('aria-hidden', 'true');
+      ghost.querySelectorAll('[id]').forEach(n => n.removeAttribute('id'));
+      ghost.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;margin:0;pointer-events:none;--dir:${dir}`;
+      document.body.appendChild(ghost);
+      setTimeout(() => ghost.remove(), 200);
+    }
     app.innerHTML = { heute: viewHeute, orte: viewOrte, papiere: viewPapiere, verlauf: viewVerlauf, alles: viewAlles }[tab]();
     document.querySelectorAll('nav.tabs button').forEach(b => b.dataset.tab === tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
     // Einblenden nur beim Tabwechsel, nicht bei jedem Neuzeichnen
     clearTimeout(enterTimer);
-    if (enter && motionOn()) {
+    app.classList.remove('enter', 'slide-in', 'area-in');
+    if (slide) {
+      app.style.setProperty('--dir', dir); void app.offsetWidth; app.classList.add('slide-in');
+      enterTimer = setTimeout(() => app.classList.remove('slide-in'), 500);
+    } else if (enter && motionOn()) {
+      // Bereichswechsel: Inhalt unter dem Umschalter gleitet in Richtung des Wechsels, sonst sanft von unten
+      const cls = enter === 'area' && dir ? 'area-in' : 'enter';
       [...app.children].forEach((c, i) => c.style.setProperty('--i', Math.min(i, 10)));
-      app.classList.remove('enter'); void app.offsetWidth; app.classList.add('enter');
-      enterTimer = setTimeout(() => app.classList.remove('enter'), 900);
-    } else app.classList.remove('enter');
+      app.style.setProperty('--dir', dir); void app.offsetWidth; app.classList.add(cls);
+      enterTimer = setTimeout(() => app.classList.remove(cls), 900);
+    }
     settleProgress();
     if (app.querySelector('[data-photo]')) hydratePhotos(app);
     const sw = app.querySelector('.areas');
     if (sw) requestAnimationFrame(() => { sw.style.setProperty('--pos', sw.dataset.pos); areaMemo = +sw.dataset.pos; });
   }
-  const goTab = t => { if (t !== tab) haptic('select'); tab = t; render({ enter: true }); window.scrollTo(0, 0); };
+  const goTab = t => { const dir = Math.sign(TABS.indexOf(t) - TABS.indexOf(tab)); if (dir) haptic('select'); tab = t; render({ enter: dir ? 'tab' : true, dir }); window.scrollTo(0, 0); };
   document.querySelector('nav.tabs').onclick = ev => { const b = ev.target.closest('button'); if (b) goTab(b.dataset.tab); };
   document.getElementById('fab').onclick = () => openSheet(null, tab === 'papiere' ? { type: { vertraege: 'contract', dokumente: 'document', warten: 'waiting' }[papersTab] || 'deadline' } : tab === 'orte' ? { type: 'place' } : {});
 
