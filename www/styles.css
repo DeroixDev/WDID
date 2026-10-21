@@ -395,6 +395,7 @@ pre.ocr-text { white-space: pre-wrap; font-family: var(--f-mono); font-size: 12p
 .ficon { flex: none; width: 44px; height: 44px; border-radius: 9px; display: grid; place-items: center; font-family: var(--f-mono); font-size: 10px; font-weight: 600; letter-spacing: .04em; background: var(--accent-soft); color: var(--accent); }
 .ficon.pdf { background: var(--due-soft); color: var(--due); }
 .ficon.video { background: var(--work-soft); color: var(--work); }
+.ficon.text { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 .ficon.andere { background: color-mix(in srgb, var(--fg) 7%, transparent); color: var(--muted); }
 .file-hero { width: 100%; max-height: 46vh; object-fit: contain; border-radius: var(--r); background: color-mix(in srgb, var(--fg) 5%, transparent); cursor: zoom-in; }
 .file-open { display: flex; align-items: center; gap: 14px; text-align: left; border: 1px solid var(--line); background: var(--surface); border-radius: var(--r); padding: 14px; color: var(--fg); }

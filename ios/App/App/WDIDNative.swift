@@ -7,6 +7,7 @@ import LocalAuthentication
 import WebKit
 import MapKit
 import QuickLook
+import UniformTypeIdentifiers
 
 /// Ankunftserkennung über die Regionsüberwachung von iOS.
 /// Lebt unabhängig von der Web-Oberfläche, weil iOS die App bei Ankunft im Hintergrund startet,
@@ -141,7 +142,8 @@ public class WDIDNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "makePdf", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "takeWorkEvents", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "searchPlaces", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "preview", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "preview", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "pickDocuments", returnType: CAPPluginReturnPromise)
     ]
 
     /// Orte über die Apple-Karten-Suche finden (braucht Internet)
@@ -197,6 +199,23 @@ public class WDIDNativePlugin: CAPPlugin, CAPBridgedPlugin {
             FilePreview.current = preview
             self.bridge?.viewController?.present(controller, animated: true)
             call.resolve()
+        }
+    }
+
+    /// Dateien-App öffnen und die gewählten Dateien direkt nach Documents/files kopieren.
+    /// So läuft nichts als Base64 über die Brücke, auch große PDFs gehen.
+    @objc func pickDocuments(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let vc = self.bridge?.viewController else {
+                call.reject("Keine Ansicht")
+                return
+            }
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.item], asCopy: true)
+            picker.allowsMultipleSelection = true
+            let handler = DocumentPick(call: call)
+            DocumentPick.current = handler
+            picker.delegate = handler
+            vc.present(picker, animated: true)
         }
     }
 
@@ -443,4 +462,51 @@ final class FilePreview: NSObject, QLPreviewControllerDataSource {
 
     func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
     func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { item }
+}
+
+final class DocumentPick: NSObject, UIDocumentPickerDelegate {
+    static var current: DocumentPick?
+    private let call: CAPPluginCall
+
+    init(call: CAPPluginCall) {
+        self.call = call
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        let fm = FileManager.default
+        guard let base = fm.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            call.reject("Kein Speicherort")
+            DocumentPick.current = nil
+            return
+        }
+        let dir = base.appendingPathComponent("files", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        var out: [[String: Any]] = []
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let name = url.lastPathComponent
+            let safe = String(name.map { ch -> Character in
+                ch.isLetter || ch.isNumber || ".- _".contains(ch) ? ch : "_"
+            }.suffix(80))
+            let stamp = Int(Date().timeIntervalSince1970 * 1000)
+            let rel = "files/\(stamp)-\(UUID().uuidString.prefix(6))-\(safe)"
+            let dest = base.appendingPathComponent(rel)
+            do {
+                try fm.copyItem(at: url, to: dest)
+                let size = (try? fm.attributesOfItem(atPath: dest.path)[.size] as? NSNumber)?.intValue ?? 0
+                let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? ""
+                out.append(["path": rel, "name": name, "size": size, "mime": mime])
+            } catch {
+                continue
+            }
+        }
+        call.resolve(["files": out])
+        DocumentPick.current = nil
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        call.resolve(["files": []])
+        DocumentPick.current = nil
+    }
 }

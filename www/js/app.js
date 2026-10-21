@@ -530,16 +530,44 @@
 
   /* ---------- Ablage: Dokumente aller Art ---------- */
   const fileById = id => state.files.find(f => f.id === id);
-  const kindOf = f => /pdf/.test(f.mime) || /\.pdf$/i.test(f.name) ? 'pdf' : /^image\//.test(f.mime) ? 'bild' : /^video\//.test(f.mime) ? 'video' : 'andere';
+  const extOf = f => ((f.file || f.name || '').match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase() || '';
+  const IMG_EXT = /^(jpe?g|png|gif|webp|heic|heif|tiff?|bmp|svg)$/, VID_EXT = /^(mp4|mov|m4v)$/;
+  const TEXT_EXT = /^(docx?|odt|rtfd?|txt|md|csv|tsv|xlsx?|ods|pptx?|odp|pages|numbers|key|json|xml|html?|log|eml|vcf|ics)$/;
+  const kindOf = f => { const x = extOf(f), m = f.mime || '';
+    return m.includes('pdf') || x === 'pdf' ? 'pdf' : /^image\//.test(m) || IMG_EXT.test(x) ? 'bild' : /^video\//.test(m) || VID_EXT.test(x) ? 'video' : /^text\//.test(m) || TEXT_EXT.test(x) ? 'text' : 'andere'; };
+  // diese Bilder zeigt die Web-Ansicht selbst (mit Zoom), alles andere übernimmt die iOS-Vorschau
+  const webImage = f => f.path.startsWith('data:image') || /^(jpe?g|png|gif|webp)$/.test(extOf(f));
   const fmtSize = n => n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toLocaleString('de-DE', { maximumFractionDigits: 1 })} MB`;
   const linkedEntries = f => state.entries.filter(e => (e.fileIds || []).includes(f.id));
   function pickFiles() {
     return new Promise(resolve => {
+      // im DOM lassen, sonst verliert WebKit das change-Ereignis
       const input = document.createElement('input');
-      input.type = 'file'; input.multiple = true;
-      input.onchange = () => resolve([...input.files]);
+      input.type = 'file'; input.multiple = true; input.hidden = true;
+      document.body.appendChild(input);
+      const done = list => { input.remove(); resolve(list); };
+      input.onchange = () => done([...input.files]);
+      input.oncancel = () => done([]);
       input.click();
     });
+  }
+  // Auf dem iPhone über die Dateien-App: iOS kopiert direkt in den App-Ordner, nichts läuft als Base64 durch
+  async function chooseFiles({ ctx = defaultCtx(), entry = null } = {}) {
+    if (Native) {
+      try {
+        const { files = [] } = await Native.pickDocuments();
+        const added = files.map(x => ({ id: uid(), name: (x.name || 'Datei').replace(/\.[^.]+$/, '') || 'Datei', file: x.name || 'Datei', path: x.path, mime: x.mime || '', size: x.size || 0, addedAt: Date.now(), context: ctx, note: '' }));
+        if (!added.length) return [];
+        state.files.unshift(...added);
+        if (entry) (entry.fileIds = entry.fileIds || []).push(...added.map(f => f.id));
+        save(); toast(added.length === 1 ? `„${added[0].name}“ abgelegt` : `${added.length} Dateien abgelegt`); haptic('success');
+        return added;
+      } catch (err) {
+        if (!/not implemented|unimplemented/i.test(err.message || '')) { toast('Ablegen hat nicht geklappt: ' + err.message); return []; }
+      }
+    }
+    const list = await pickFiles();
+    return list.length ? addFiles(list, { ctx, entry }) : [];
   }
   async function addFiles(files, { ctx = defaultCtx(), entry = null } = {}) {
     const added = [];
@@ -559,7 +587,7 @@
   }
   async function openFile(f) {
     const k = kindOf(f);
-    if (k === 'bild' || k === 'video') return openViewer([f.path], 0);
+    if ((k === 'bild' && (webImage(f) || !Native)) || k === 'video') return openViewer([f.path], 0);
     if (Native && !f.path.startsWith('data:')) { try { await Native.preview({ path: f.path, title: f.name }); return; } catch (err) { toast(err.message); return; } }
     const src = f.path.startsWith('data:') ? f.path : await resolvePhoto(f.path);
     const w = window.open(); if (w) w.location.href = src; else toast('Pop-up blockiert');
@@ -568,7 +596,7 @@
     try { const { uri } = await FS.getUri({ path: f.path, directory: 'DATA' }); await Share.share({ title: f.name, files: [uri] }); }
     catch (err) { if (!/cancel/i.test(err.message || '')) toast('Teilen hat nicht geklappt'); }
   }
-  const fileIcon = k => `<span class="ficon ${k}">${{ pdf: 'PDF', bild: 'BILD', video: 'VID', andere: 'DATEI' }[k]}</span>`;
+  const fileIcon = k => `<span class="ficon ${k}">${{ pdf: 'PDF', bild: 'BILD', video: 'VID', text: 'TEXT', andere: 'DATEI' }[k]}</span>`;
   function openFileSheet(f) {
     let confirmDel = false;
     const draw = () => {
@@ -930,7 +958,7 @@
       if (q) all = all.filter(x => (x.f ? [x.f.name, x.f.file, x.f.note, ...x.links.map(e => e.title)] : [x.e.title, x.e.ref, mediaCaption(x.media)]).join(' ').toLowerCase().includes(q));
       html += `<div class="row-actions" style="margin:0 0 14px"><button class="btn small primary" id="addFiles">Datei ablegen</button></div>`;
       html += `<input class="search" id="fq" type="search" placeholder="Dokumente durchsuchen" value="${esc(fileQuery)}">`;
-      html += `<div class="filters">${[['alle', 'Alle'], ['pdf', 'PDFs'], ['bild', 'Bilder'], ['video', 'Videos'], ['andere', 'Andere']].map(([k, l]) => `<button class="chip" data-ffilter="${k}" aria-pressed="${fileFilter === k}">${l}</button>`).join('')}</div>`;
+      html += `<div class="filters">${[['alle', 'Alle'], ['pdf', 'PDFs'], ['bild', 'Bilder'], ['video', 'Videos'], ['text', 'Texte'], ['andere', 'Andere']].map(([k, l]) => `<button class="chip" data-ffilter="${k}" aria-pressed="${fileFilter === k}">${l}</button>`).join('')}</div>`;
       if (!all.length) html += `<div class="empty">${state.files.length || q ? 'Nichts gefunden.' : 'Hier liegen alle deine Dokumente: PDFs, Scans, Bilder, Videos, auch aus der Dateien-App. Fotos aus Einträgen tauchen automatisch auf. Jedes Dokument lässt sich mit Einträgen verknüpfen.'}</div>`;
       else html += `<div class="files">${all.slice(0, 300).map(x => x.f
         ? `<button class="file-row" data-file="${x.f.id}">${x.k === 'bild' ? `<img data-photo="${esc(x.f.path)}" alt="">` : fileIcon(x.k)}<span class="fbody"><b>${esc(x.f.name)}</b><span class="sub">${[fmtSize(x.f.size), new Date(x.at).toLocaleDateString('de-DE'), x.links.length ? `↔ ${esc(x.links[0].title)}${x.links.length > 1 ? ' +' + (x.links.length - 1) : ''}` : ''].filter(Boolean).join(' · ')}</span></span></button>`
@@ -1369,7 +1397,7 @@
       }
       if (b.dataset.fview) return openFile(fileById(b.dataset.fview));
       if (b.dataset.funlink) { read(); e.fileIds = e.fileIds.filter(x => x !== b.dataset.funlink); draw(); return; }
-      if (b.id === 'attachFile') { read(); pickFiles().then(fs => fs.length && addFiles(fs, { ctx: ctxOf(e), entry: e })).then(() => draw()); return; }
+      if (b.id === 'attachFile') { read(); chooseFiles({ ctx: ctxOf(e), entry: e }).then(() => draw()); return; }
       if (b.id === 'locSearch') return searchLoc();
       if (b.id === 'locHere') return locHere();
       if (b.dataset.locpick !== undefined) {
@@ -2156,7 +2184,7 @@
     if (d.file) return openFileSheet(fileById(d.file));
     if (d.emedia) { const e = state.entries.find(x => x.id === d.emedia); return openViewer(e.photos, +d.ei); }
     if (d.ffilter) { fileFilter = d.ffilter; return render(); }
-    if (el.id === 'addFiles') { pickFiles().then(fs => fs.length && addFiles(fs).then(() => render())); return; }
+    if (el.id === 'addFiles') { chooseFiles().then(added => added.length && render()); return; }
     if (d.billmonth !== undefined) { billMonth = +d.billmonth; return render(); }
     if (d.billclient) return copyText(billingText(billing(billMonth), d.billclient), `Zeiten für ${d.billclient} kopiert`);
     if (el.id === 'copyBilling') return copyText(billingText(billing(billMonth)), 'Zeiten kopiert');
