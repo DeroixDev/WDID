@@ -165,9 +165,11 @@ nav.tabs svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stro
 .result { font-size: 14px; color: var(--accent); }
 .notes-list { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
 .photos { display: flex; gap: 8px; flex-wrap: wrap; }
-.photos img { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); cursor: zoom-in; }
-.viewer { position: fixed; inset: 0; z-index: 40; background: color-mix(in srgb, var(--fg) 88%, transparent); display: grid; place-items: center; padding: 24px; }
-.viewer img { max-width: 100%; max-height: 100%; border-radius: 8px; }
+.photos img, .vthumb { width: 76px; height: 76px; object-fit: cover; border-radius: 12px; border: 1px solid var(--line); cursor: zoom-in; }
+.vthumb { position: relative; padding: 0; overflow: hidden; background: #000; display: block; }
+.vthumb video { width: 100%; height: 100%; object-fit: cover; pointer-events: none; display: block; }
+.play { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.play svg { width: 26px; height: 26px; padding: 6px; box-sizing: content-box; border-radius: 50%; fill: #fff; background: rgba(0,0,0,.45); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
 .timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .timeline li { display: grid; grid-template-columns: 74px 1fr; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
 .timeline .when { font-family: var(--f-mono); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -254,7 +256,6 @@ details.ocr pre { white-space: pre-wrap; font-family: var(--f-mono); font-size: 
 .toast.out { animation: toastOut .25s ease forwards; }
 .fab { animation: fabIn .5s var(--spring) .15s both; }
 nav.tabs button[aria-current="page"] svg { animation: tabPop .4s var(--spring); }
-.viewer { animation: fade .2s ease both; }
 .banner, .card.accent { animation: rise .4s var(--ease) both; }
 .card.accent { animation: glow 1.6s ease-out 2; }
 
@@ -275,3 +276,43 @@ nav.tabs button[aria-current="page"] svg { animation: tabPop .4s var(--spring); 
   *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 :root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { animation-duration: .01ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+
+/* ---------- Bildbetrachter ---------- */
+.viewer { position: fixed; inset: 0; z-index: 40; background: #000; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; color: #fff; }
+.v-strip { display: flex; height: 100%; will-change: transform; }
+.v-slide { flex: 0 0 100%; height: 100%; display: grid; place-items: center; overflow: hidden; }
+.v-slide img { max-width: 100%; max-height: 100%; object-fit: contain; transform-origin: center; will-change: transform; -webkit-user-drag: none; }
+.v-slide video { max-width: 100%; max-height: calc(100% - 140px); background: #000; touch-action: auto; }
+.v-bar { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: calc(env(safe-area-inset-top, 0px) + 8px) max(12px, env(safe-area-inset-right, 0px)) 8px max(12px, env(safe-area-inset-left, 0px));
+  background: linear-gradient(rgba(0,0,0,.5), transparent); transition: opacity .2s; }
+.v-count { font-family: var(--f-mono); font-size: 13px; opacity: .85; }
+.v-actions { display: flex; gap: 4px; }
+.v-btn { width: 42px; height: 42px; border-radius: 50%; border: 0; background: rgba(255,255,255,.12); color: #fff; display: grid; place-items: center; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.v-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.v-btn.armed { background: #C4553F; }
+.v-dots { position: absolute; left: 0; right: 0; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); display: flex; justify-content: center; gap: 4px; }
+.v-dots i { width: 22px; height: 22px; display: grid; place-items: center; cursor: pointer; }
+.v-dots i::after { content: ""; width: 6px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.4); transition: width .25s, background-color .25s; }
+.v-dots i.on::after { width: 16px; background: #fff; }
+.viewer.zoomed .v-bar, .viewer.zoomed .v-dots { opacity: 0; pointer-events: none; }
+.viewer { animation: fade .22s ease both; }
+.viewer.closing { animation: fadeOut .2s ease forwards; }
+
+/* ---------- Bereiche Privat / Arbeit ---------- */
+.areas { position: relative; display: grid; grid-template-columns: repeat(var(--n), 1fr); background: color-mix(in srgb, var(--fg) 6%, transparent); border-radius: 12px; padding: 3px; margin: -8px 0 22px; }
+.areas::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / var(--n)); border-radius: 9px; background: var(--surface);
+  box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 0 0 1px var(--line); transform: translateX(calc(var(--pos) * 100%)); transition: transform .38s var(--spring); }
+.areas button { position: relative; border: 0; background: none; padding: 8px 0; font-size: 14px; font-weight: 500; color: var(--muted); border-radius: 9px; transition: color .25s; }
+.areas button[aria-selected="true"] { color: var(--fg); font-weight: 600; }
+.areas button[data-area="arbeit"][aria-selected="true"] { color: var(--work); }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ctx-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 10px 6px 11px; font-size: 13px; font-weight: 600; color: var(--fg); transition: transform .18s var(--ease), background-color .25s, color .25s; }
+.ctx-chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.ctx-chip.work { background: var(--work-soft); border-color: transparent; color: var(--work); }
+.ctx-chip.work i { background: var(--work); }
+.ctx-chip svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; opacity: .6; }
+.ctx-chip:active { transform: scale(.95); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+/* im Arbeitsbereich übernimmt Fjordblau die Akzentfarbe, damit du auf einen Blick siehst, wo du bist */
+:root[data-area="arbeit"] { --accent: var(--work); --accent-soft: var(--work-soft); }

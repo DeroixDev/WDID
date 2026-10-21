@@ -49,8 +49,8 @@
 
   /* ---------- Daten ---------- */
   const DEFAULT_SETTINGS = { state: 'NW', morningOn: true, morningTime: '07:30', eveningOn: true, eveningTime: '20:30',
-    lock: false, workFilter: false, workStart: '08:00', workEnd: '17:00', workDays: [1, 2, 3, 4, 5],
-    theme: 'system', motion: true, haptics: true };
+    lock: false, workStart: '08:00', workEnd: '17:00', workDays: [1, 2, 3, 4, 5],
+    theme: 'system', motion: true, haptics: true, area: 'privat', autoArea: true };
   const blank = () => ({ version: 2, sample: false, places: [], entries: [], cases: [], routes: {}, shop: {}, history: {}, log: [], settings: { ...DEFAULT_SETTINGS } });
   const newEntry = o => ({ id: uid(), type: 'task', title: '', notes: '', context: 'privat', date: null, time: null, received: null, source: '',
     leadDays: 3, placeId: null, group: null, items: [], repeat: 'none', caseId: null, photos: [], proof: null, contract: null,
@@ -60,7 +60,9 @@
     const b = blank();
     s = { ...b, ...s, settings: { ...b.settings, ...(s.settings || {}) } };
     s.entries = (s.entries || []).map(e => newEntry({ ...e }));
-    s.places = (s.places || []).map(p => ({ kind: 'store', group: null, radius: 150, lat: null, lng: null, ...p }));
+    s.places = (s.places || []).map(p => ({ kind: 'store', group: null, radius: 150, lat: null, lng: null, area: 'beide', ...p }));
+    s.cases = (s.cases || []).map(c => ({ context: 'privat', ...c }));
+    if (!['privat', 'arbeit', 'alle'].includes(s.settings.area)) s.settings.area = 'privat';
     s.version = 2;
     return s;
   }
@@ -119,17 +121,38 @@
   const listsFor = p => state.entries.filter(e => e.type === 'place' && !e.done && (e.placeId === p.id || (e.group && e.group === p.group)));
   const caseById = id => state.cases.find(c => c.id === id);
 
-  function isHiddenByWork(e) {
-    const s = state.settings;
-    if (!s.workFilter || e.context !== 'arbeit' || showWorkAnyway) return false;
-    const d = new Date(), m = nowMinutes();
-    const inWork = s.workDays.includes(d.getDay()) && m >= toMinutes(s.workStart) && m < toMinutes(s.workEnd);
-    return !inWork;
+  /* ---------- Bereiche: Privat und Arbeit getrennt ---------- */
+  const AREAS = { privat: 'Privat', arbeit: 'Arbeit', alle: 'Beides' };
+  const area = () => state.settings.area;
+  const ctxOf = x => (x && x.context) || 'privat';
+  const inArea = x => area() === 'alle' || ctxOf(x) === area();
+  const placeInArea = p => area() === 'alle' || (p.area || 'beide') === 'beide' || p.area === area()
+    || state.entries.some(e => e.type === 'place' && !e.done && e.placeId === p.id && inArea(e));
+  const logInArea = l => area() === 'alle' || (l.ctx || ctxOf(state.entries.find(e => e.id === l.entryId)) ) === area();
+  // neue Einträge landen automatisch im Bereich, in dem du gerade bist
+  const defaultCtx = () => area() === 'arbeit' ? 'arbeit' : 'privat';
+  function inWorkHours(d = new Date()) {
+    const s = state.settings, m = d.getHours() * 60 + d.getMinutes();
+    return s.workDays.includes(d.getDay()) && m >= toMinutes(s.workStart) && m < toMinutes(s.workEnd);
   }
-  let showWorkAnyway = false;
+  let lastAuto = null;
+  function autoSwitchArea() {
+    if (!state.settings.autoArea) return false;
+    const want = inWorkHours() ? 'arbeit' : 'privat';
+    if (want === lastAuto) return false;          // nur beim Wechsel der Arbeitszeit, deine Handwahl bleibt sonst stehen
+    lastAuto = want;
+    if (state.settings.area === want) return false;
+    state.settings.area = want; applyArea(); return true;
+  }
+  function applyArea() { document.documentElement.dataset.area = area(); }
+  function setArea(a) {
+    if (a === area()) return;
+    state.settings.area = a; applyArea(); haptic('select'); save(); render({ enter: true });
+  }
 
-  function dayModel(day) {
-    const open = state.entries.filter(e => e.type !== 'place');
+  function dayModel(day, { all = false } = {}) {
+    const mine = all ? state.entries : state.entries.filter(inArea);
+    const open = mine.filter(e => e.type !== 'place');
     const t = day;
     const overdue = open.filter(e => !e.done && e.date && e.date < t && !['contract', 'document', 'waiting'].includes(e.type));
     const todays = open.filter(e => e.date === t && !['contract', 'document', 'waiting'].includes(e.type))
@@ -137,14 +160,14 @@
     const upcoming = open.filter(e => DATED_ALERT.includes(e.type) && !e.done && e.date && e.date >= t && (e.type !== 'deadline' || e.date > t) && daysBetween(t, e.date) <= (e.leadDays ?? 3))
       .sort((a, b) => a.date.localeCompare(b.date));
     const followUp = open.filter(e => e.type === 'waiting' && !e.done && e.date && e.date <= t);
-    const lists = state.entries.filter(e => e.type === 'place' && !e.done && e.items.some(i => !i.done));
+    const lists = mine.filter(e => e.type === 'place' && !e.done && e.items.some(i => !i.done));
     return { overdue, todays, upcoming, followUp, lists };
   }
 
   function logDone(e, title) {
     let placeName = null;
     if (here) { const p = state.places.find(p => p.lat != null && dist(here, p) <= Math.max(p.radius, 150)); if (p) placeName = p.name; }
-    state.log.unshift({ id: uid(), entryId: e.id, title: title || e.title, type: e.type, at: Date.now(), place: placeName });
+    state.log.unshift({ id: uid(), entryId: e.id, title: title || e.title, type: e.type, at: Date.now(), place: placeName, ctx: ctxOf(e) });
     if (state.log.length > 3000) state.log.length = 3000;
   }
 
@@ -237,7 +260,7 @@
   const at = (date, time) => { const [h, m] = (time || '09:00').split(':').map(Number); const d = parse(date); d.setHours(h, m, 0, 0); return d; };
   let notifyAllowed = null, scheduleTimer;
   function briefingText(day) {
-    const m = dayModel(day);
+    const m = dayModel(day, { all: true });
     const items = m.todays.filter(e => !e.done);
     const parts = [];
     if (items.length) parts.push(`${items.length} für heute`);
@@ -337,8 +360,57 @@
     });
   }
   async function hydratePhotos(root) {
-    for (const img of root.querySelectorAll('img[data-photo]')) { const src = await resolvePhoto(img.dataset.photo); if (src) img.src = src; }
+    for (const el of root.querySelectorAll('[data-photo]')) {
+      const src = await resolvePhoto(el.dataset.photo); if (!src) continue;
+      // #t=0.1 lässt iOS das erste Bild des Videos als Vorschau zeigen
+      el.src = el.tagName === 'VIDEO' ? src + '#t=0.1' : src;
+    }
   }
+
+  /* ---------- Videos ---------- */
+  const isVideo = p => /\.(mp4|mov|m4v|webm)$/i.test(p) || p.startsWith('data:video') || p.startsWith('blob:');
+  const blobToBase64 = blob => new Promise((resolve, reject) => {
+    const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1] || ''); r.onerror = () => reject(r.error); r.readAsDataURL(blob);
+  });
+  async function saveVideo(file) {
+    if (!FS) { const url = URL.createObjectURL(file); photoSrc[url] = url; return url; }   // Browser-Vorschau: nur bis zum Neuladen
+    const ext = ((file.name || '').match(/\.(mov|mp4|m4v)$/i)?.[1] || (/mp4/.test(file.type) ? 'mp4' : 'mov')).toLowerCase();
+    const name = `media/${Date.now()}-${uid()}.${ext}`;
+    const CH = 3 * 1024 * 1024;   // Vielfaches von 3, damit die Base64-Stücke sauber aneinanderpassen
+    for (let off = 0; off < file.size; off += CH) {
+      const b64 = await blobToBase64(file.slice(off, off + CH));
+      if (off === 0) await FS.writeFile({ path: name, data: b64, directory: 'DATA', recursive: true });
+      else await FS.appendFile({ path: name, data: b64, directory: 'DATA' });
+      if (file.size > CH * 2) toast(`Video wird gespeichert … ${Math.min(100, Math.round((off + CH) / file.size * 100))} %`);
+    }
+    return name;
+  }
+  function pickMedia({ camera, video }) {
+    return new Promise(resolve => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = camera ? (video ? 'video/*' : 'image/*') : 'image/*,video/*';
+      if (camera) input.setAttribute('capture', 'environment');
+      input.onchange = () => resolve(input.files[0] || null);
+      input.click();
+    });
+  }
+  async function storeMedia(file) {
+    if (/^video\//.test(file.type) || /\.(mov|mp4|m4v)$/i.test(file.name || '')) return saveVideo(file);
+    return savePhoto(await fileToJpegBase64(file));
+  }
+  async function deleteMedia(paths) {
+    const used = new Set(state.entries.flatMap(e => e.photos || []));
+    for (const p of paths) {
+      if (used.has(p)) continue;
+      if (p.startsWith('blob:')) { URL.revokeObjectURL(p); continue; }
+      if (FS && !p.startsWith('data:')) FS.deleteFile({ path: p, directory: 'DATA' }).catch(() => {});
+    }
+  }
+  const playIcon = '<span class="play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></span>';
+  const mediaThumbs = list => list.length ? `<div class="photos">${list.map((p, i) => isVideo(p)
+    ? `<button type="button" class="vthumb" data-view="${i}" aria-label="Video ${i + 1} abspielen"><video data-photo="${esc(p)}" muted playsinline preload="metadata"></video>${playIcon}</button>`
+    : `<img data-photo="${esc(p)}" data-view="${i}" alt="Foto ${i + 1}">`).join('')}</div>` : '';
 
   /* ---------- Brief-Scanner ---------- */
   async function scanLetter() {
@@ -404,7 +476,7 @@
   }
   function dayText() {
     const m = dayModel(today());
-    const parts = [`WDID – ${longDate(today())}`];
+    const parts = [`WDID – ${longDate(today())}${area() !== 'alle' ? ' – ' + AREAS[area()] : ''}`];
     const block = (title, list) => { if (list.length) parts.push(`\n== ${title} ==\n` + list.map(entryText).join('\n\n')); };
     block('Liegengeblieben', m.overdue); block('Heute', m.todays); block('Fristen in Sicht', m.upcoming); block('Nachhaken', m.followUp); block('Ortslisten', m.lists);
     return parts.join('\n');
@@ -446,7 +518,7 @@
     }
     const c = caseById(e.caseId); if (c) tags.push(`<span class="tag plain">${esc(c.title)}</span>`);
     if (e.photos?.length) tags.push(`<span class="tag plain">${e.photos.length} Foto${e.photos.length > 1 ? 's' : ''}</span>`);
-    if (e.context === 'arbeit') tags.push('<span class="tag work">Arbeit</span>');
+    if (e.context === 'arbeit' && area() === 'alle') tags.push('<span class="tag work">Arbeit</span>');
     if (e.repeat && e.repeat !== 'none') tags.push(`<span class="tag plain">${{ daily: 'täglich', weekly: 'wöchentlich', monthly: 'monatlich' }[e.repeat]}</span>`);
     return `<div class="item ${e.done ? 'done' : ''} ${overdue ? 'overdue' : ''}">
       <div class="time">${esc(timeCol)}</div>
@@ -459,7 +531,13 @@
     </div>`;
   }
   const group = (title, rows, aside = '') => `<section class="group"><h2><span>${title}</span><span>${aside}</span></h2><div class="list">${rows}</div></section>`;
-  const header = (eyebrow, title, extra = '') => `<header class="top"><div><div class="weekday">${eyebrow}</div><h1>${title}</h1></div>${extra || '<div class="brand">WDID</div>'}</header>`;
+  const areaSwitch = () => {
+    const keys = Object.keys(AREAS), i = keys.indexOf(area());
+    return `<div class="areas" role="tablist" aria-label="Bereich" style="--n:${keys.length};--pos:${areaMemo ?? i}" data-pos="${i}">${keys.map(k => `<button role="tab" data-area="${k}" aria-selected="${k === area()}">${AREAS[k]}</button>`).join('')}</div>`;
+  };
+  let areaMemo = null;
+  const ctxChip = ctx => `<button type="button" class="ctx-chip ${ctx === 'arbeit' ? 'work' : ''}" data-ctx-toggle aria-label="Bereich wechseln, gerade ${ctx === 'arbeit' ? 'Arbeit' : 'Privat'}"><i></i>${ctx === 'arbeit' ? 'Arbeit' : 'Privat'}<svg viewBox="0 0 24 24"><path d="M7 10l5-5 5 5M7 14l5 5 5-5"/></svg></button>`;
+  const header = (eyebrow, title, extra = '') => areaSwitch() + `<header class="top"><div><div class="weekday">${eyebrow}</div><h1>${title}</h1></div>${extra || '<div class="brand">WDID</div>'}</header>`;
   const gearBtn = '<button class="icon-btn" id="openSettings" aria-label="Einstellungen"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>';
 
   function shoppingList(l, { compact = false } = {}) {
@@ -483,8 +561,7 @@
   /* ---------- Ansichten ---------- */
   function viewHeute() {
     const d = new Date(), t = today(), m = dayModel(t);
-    const visible = arr => arr.filter(e => !isHiddenByWork(e));
-    const hidden = [...m.overdue, ...m.todays, ...m.upcoming].filter(isHiddenByWork).length;
+    const visible = arr => arr;
     const openToday = visible(m.todays).filter(e => !e.done).length;
     const pills = [];
     if (m.overdue.length) pills.push(`<span class="pill due">${m.overdue.length} liegengeblieben</span>`);
@@ -499,16 +576,16 @@
     const dayItems = visible(m.todays), dayDone = dayItems.filter(e => e.done).length;
     if (dayItems.length) html += `<div class="day-progress">${progressBar('day', dayDone, dayItems.length)}<span><b>${dayDone}</b> von ${dayItems.length} geschafft</span></div>`;
     if (state.settings.eveningOn && nowMinutes() >= toMinutes(state.settings.eveningTime)) {
-      const doneToday = state.log.filter(l => iso(new Date(l.at)) === t).length;
+      const doneToday = state.log.filter(l => iso(new Date(l.at)) === t && logInArea(l)).length;
       html += `<div class="banner"><span>Tagesabschluss: ${doneToday} erledigt, ${openToday + m.overdue.length} offen</span><button class="btn small" data-review>Rückblick</button></div>`;
     }
-    if (hidden) html += `<p class="note">Feierabend: ${hidden} Arbeitseinträge ausgeblendet. <button class="link" id="showWork">Trotzdem zeigen</button></p>`;
+    if (area() === 'arbeit' && !inWorkHours()) html += `<div class="banner"><span>Feierabend. Die Arbeit kann warten.</span><button class="btn small" data-area="privat">Zu Privat</button></div>`;
 
     if (visible(m.overdue).length) html += group('Liegengeblieben', visible(m.overdue).map(e => itemRow(e, { showDate: true })).join(''), `<button class="link" data-review>auf morgen</button>`);
     html += group('Heute', visible(m.todays).length ? visible(m.todays).map(e => itemRow(e)).join('') : '<div class="empty">Nichts geplant. Mit + legst du etwas an.</div>');
     if (visible(m.upcoming).length) html += group('Fristen in Sicht', visible(m.upcoming).map(e => itemRow(e)).join(''));
     if (m.followUp.length) html += group('Nachhaken', m.followUp.map(e => itemRow(e)).join(''));
-    if (m.lists.length) html += group('Wenn du unterwegs bist', m.lists.filter(l => !isHiddenByWork(l)).map(e => {
+    if (m.lists.length) html += group('Wenn du unterwegs bist', m.lists.map(e => {
       const left = e.items.filter(i => !i.done);
       const p = placeById(e.placeId);
       const label = p?.kind === 'person' ? `Wenn du ${p.name} siehst` : listTarget(e);
@@ -530,7 +607,7 @@
     const cardFor = (title, sub, lists, p, isNear) => {
       let h = `<div class="card ${isNear ? 'accent' : ''}"><div class="card-row"><h3>${esc(title)}</h3><span class="sub">${sub}</span></div>`;
       lists.forEach(l => {
-        h += `<div class="card-row"><span class="sub" data-edit="${l.id}" style="cursor:pointer">${esc(l.title)}${l.context === 'arbeit' ? ' · Arbeit' : ''}</span><span class="sub">${l.items.filter(i => i.done).length}/${l.items.length}</span></div>`;
+        h += `<div class="card-row"><span class="sub" data-edit="${l.id}" style="cursor:pointer">${esc(l.title)}${l.context === 'arbeit' && area() === 'alle' ? ' · Arbeit' : ''}</span><span class="sub">${l.items.filter(i => i.done).length}/${l.items.length}</span></div>`;
         h += progressBar('list-' + l.id, l.items.filter(i => i.done).length, l.items.length);
         const pl = placeById(l.placeId);
         h += shoppingList(l, { compact: !l.group && pl?.kind !== 'store' });
@@ -541,25 +618,25 @@
       return h + '</div>';
     };
 
-    const groupLists = state.entries.filter(e => e.type === 'place' && !e.done && e.group);
+    const groupLists = state.entries.filter(e => e.type === 'place' && !e.done && e.group && inArea(e));
     for (const [g, name] of Object.entries(GROUPS)) {
       const ls = groupLists.filter(l => l.group === g);
       if (!ls.length) continue;
       const members = state.places.filter(p => p.group === g).map(p => p.name);
       html += cardFor(`Jeder ${name}`, members.length ? esc(members.join(', ')) : 'Noch kein Laden zugeordnet', ls, null, false);
     }
-    const stores = state.places.filter(p => p.kind !== 'person');
-    const persons = state.places.filter(p => p.kind === 'person');
+    const stores = state.places.filter(p => p.kind !== 'person' && placeInArea(p));
+    const persons = state.places.filter(p => p.kind === 'person' && placeInArea(p));
     stores.forEach(p => {
       let sub = p.lat != null ? `Standort gespeichert · ${p.radius} m` : 'Kein Standort gespeichert';
       let near = false;
       if (here && p.lat != null) { const m = dist(here, p); near = m <= p.radius; sub = near ? 'Du bist hier' : `${m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(1) + ' km'} entfernt`; }
       if (p.group) sub += ` · ${GROUPS[p.group]}`;
-      html += cardFor(p.name, sub, state.entries.filter(e => e.type === 'place' && !e.done && e.placeId === p.id), p, near);
+      html += cardFor(p.name, sub, state.entries.filter(e => e.type === 'place' && !e.done && e.placeId === p.id && inArea(e)), p, near);
     });
     if (persons.length) {
       html += '<section class="group"><h2><span>Personen</span><span></span></h2></section>';
-      persons.forEach(p => { html += cardFor(`Wenn du ${p.name} siehst`, '', state.entries.filter(e => e.type === 'place' && !e.done && e.placeId === p.id), p, false); });
+      persons.forEach(p => { html += cardFor(`Wenn du ${p.name} siehst`, '', state.entries.filter(e => e.type === 'place' && !e.done && e.placeId === p.id && inArea(e)), p, false); });
     }
     if (!stores.length && !persons.length && !groupLists.length) html += '<div class="empty">Noch keine Orte. Tippe auf „Ort hinzufügen“.</div>';
     return html;
@@ -572,7 +649,7 @@
     html += `<div class="segmented">${segs.map(([k, l]) => `<button class="chip" data-paper="${k}" aria-pressed="${papersTab === k}">${l}</button>`).join('')}</div>`;
     const sortByDate = (a, b) => (a.date || '9999').localeCompare(b.date || '9999');
     if (papersTab === 'vorgaenge') {
-      const cases = state.cases.filter(c => !c.closed);
+      const cases = state.cases.filter(c => !c.closed && inArea(c));
       html += '<div class="row-actions" style="margin:0 0 16px"><button class="btn small" id="newCase">Neuer Vorgang</button></div>';
       if (!cases.length) html += '<div class="empty">Ein Vorgang bündelt alles zu einer Sache: Brief, Antwort, Fristen, Fotos. Lege einen an oder ordne einen Eintrag einem Vorgang zu.</div>';
       cases.forEach(c => {
@@ -581,11 +658,11 @@
         html += `<div class="card" data-case="${c.id}" style="cursor:pointer"><div class="card-row"><h3>${esc(c.title)}</h3><span class="sub">${es.length} Einträge</span></div>
           <div class="sub">${next ? `Nächstes: ${esc(next.title)} · ${fmtDate(next.date)}` : 'Nichts offen'}</div></div>`;
       });
-      const closed = state.cases.filter(c => c.closed);
+      const closed = state.cases.filter(c => c.closed && inArea(c));
       if (closed.length) html += `<p class="note">${closed.length} abgeschlossene Vorgänge im Verlauf.</p>`;
     } else {
       const type = { vertraege: 'contract', dokumente: 'document', warten: 'waiting' }[papersTab];
-      const list = state.entries.filter(e => e.type === type && !e.done).sort(sortByDate);
+      const list = state.entries.filter(e => e.type === type && !e.done && inArea(e)).sort(sortByDate);
       const intro = { contract: 'Handy, Strom, Fitnessstudio, Versicherung: WDID erinnert dich vor dem letzten Kündigungstag.',
         document: 'Ausweis, Pass, Führerschein, TÜV, Garantien: mit Ablaufdatum und Foto.',
         waiting: 'Erstattungen, Rückrufe, Antworten: WDID erinnert dich ans Nachhaken.' }[type];
@@ -599,16 +676,16 @@
   function viewVerlauf() {
     const t = today(), d = new Date();
     const monday = addDays(t, -((d.getDay() + 6) % 7));
-    const weekDone = state.log.filter(l => iso(new Date(l.at)) >= monday).length;
-    const nextWeek = state.entries.filter(e => !e.done && DATED_ALERT.includes(e.type) && e.date && e.date > t && daysBetween(t, e.date) <= 7);
-    const waiting = state.entries.filter(e => e.type === 'waiting' && !e.done);
+    const weekDone = state.log.filter(l => iso(new Date(l.at)) >= monday && logInArea(l)).length;
+    const nextWeek = state.entries.filter(e => !e.done && DATED_ALERT.includes(e.type) && e.date && e.date > t && daysBetween(t, e.date) <= 7 && inArea(e));
+    const waiting = state.entries.filter(e => e.type === 'waiting' && !e.done && inArea(e));
     let html = header('What did I do', 'Verlauf');
     html += `<div class="card"><div class="card-row"><h3>Diese Woche</h3><button class="btn small" data-review>Tagesrückblick</button></div>
       <div class="stat-row"><div class="stat"><b>${weekDone}</b><span>erledigt</span></div><div class="stat"><b>${nextWeek.length}</b><span>Fristen in 7 Tagen</span></div><div class="stat"><b>${waiting.length}</b><span>wartet auf</span></div></div>
       ${nextWeek.length ? `<div class="sub">${nextWeek.slice(0, 4).map(e => `${esc(e.title)} · ${fmtDate(e.date)}`).join('<br>')}</div>` : ''}</div>`;
     html += `<input class="search" id="logq" type="search" placeholder="Wann habe ich … ? z. B. Zählerstand, Widerspruch" value="${esc(logQuery)}">`;
     const q = logQuery.trim().toLowerCase();
-    const entries = state.log.filter(l => !q || `${l.title} ${l.place || ''}`.toLowerCase().includes(q));
+    const entries = state.log.filter(l => logInArea(l) && (!q || `${l.title} ${l.place || ''}`.toLowerCase().includes(q)));
     if (!entries.length) return html + '<div class="empty">Hier sammelt sich alles, was du abhakst, mit Datum und Uhrzeit.</div>';
     let lastDay = null;
     entries.slice(0, 400).forEach(l => {
@@ -623,13 +700,13 @@
   function viewAlles() {
     const q = query.trim().toLowerCase();
     const list = state.entries.filter(e => {
-      if (filter === 'arbeit' && e.context !== 'arbeit') return false;
+      if (!inArea(e)) return false;
       if (Object.keys(TYPE).includes(filter) && e.type !== filter) return false;
       if (filter === 'erledigt' ? !e.done : e.done) return false;
       if (!q) return true;
       return [e.title, e.notes, e.source, e.ocrText, caseById(e.caseId)?.title, ...(e.items || []).map(i => i.text)].join(' ').toLowerCase().includes(q);
     }).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999') || (a.time || '').localeCompare(b.time || ''));
-    const chips = [['alle', 'Alle'], ['deadline', 'Fristen'], ['reminder', 'Erinnerungen'], ['task', 'Aufgaben'], ['place', 'Ortslisten'], ['waiting', 'Wartet auf'], ['contract', 'Verträge'], ['document', 'Dokumente'], ['arbeit', 'Arbeit'], ['erledigt', 'Erledigt']]
+    const chips = [['alle', 'Alle'], ['deadline', 'Fristen'], ['reminder', 'Erinnerungen'], ['task', 'Aufgaben'], ['place', 'Ortslisten'], ['waiting', 'Wartet auf'], ['contract', 'Verträge'], ['document', 'Dokumente'], ['erledigt', 'Erledigt']]
       .map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${filter === k}">${l}</button>`).join('');
     const rows = list.map(e => e.type === 'place'
       ? `<div class="item"><div class="time">Ort</div><div class="body" data-edit="${e.id}"><div class="title">${esc(listTarget(e))} · ${esc(e.title)}</div><div class="desc">${e.items.filter(i => !i.done).length} offen</div></div><span></span></div>`
@@ -663,7 +740,8 @@
   function openSheet(entry, { draft = null, type = null, caseId = null, placeId = null, info = null, quick = false } = {}) {
     const isNew = !entry;
     const t = today();
-    const e = entry ? JSON.parse(JSON.stringify(entry)) : (draft || newEntry({ type: type || 'reminder', date: t, received: t, source: type === 'deadline' ? 'Brief' : '', caseId, placeId: placeId || null }));
+    const e = entry ? JSON.parse(JSON.stringify(entry)) : (draft || newEntry({ type: type || 'reminder', date: t, received: t, source: type === 'deadline' ? 'Brief' : '', caseId, placeId: placeId || null, context: caseId ? ctxOf(caseById(caseId)) : defaultCtx() }));
+    if (isNew && draft && !draft._ctxSet) e.context = defaultCtx();
     if (isNew && e.type === 'place' && !e.placeId && !e.group) { const p = state.places.find(p => p.kind !== 'person'); if (p) e.placeId = p.id; else e.group = 'supermarkt'; }
     if (isNew && e.type === 'contract' && !e.contract) e.contract = { termEnd: L.addMonths(t, 12), noticeN: 1, noticeUnit: 'Monate', renewMonths: 1 };
     let confirmDel = false, calcResult = null;
@@ -671,8 +749,8 @@
 
     const draw = () => {
       const placeOpts = Object.entries(GROUPS).map(([g, n]) => `<option value="g:${g}" ${e.group === g ? 'selected' : ''}>Jeder ${n}</option>`).join('') +
-        state.places.map(p => `<option value="${p.id}" ${!e.group && p.id === e.placeId ? 'selected' : ''}>${p.kind === 'person' ? 'Person: ' : ''}${esc(p.name)}</option>`).join('') + '<option value="__new">Neuer Ort …</option>';
-      const caseOpts = '<option value="">Kein Vorgang</option>' + state.cases.filter(c => !c.closed || c.id === e.caseId).map(c => `<option value="${c.id}" ${c.id === e.caseId ? 'selected' : ''}>${esc(c.title)}</option>`).join('') + '<option value="__new">Neuer Vorgang …</option>';
+        state.places.filter(p => p.id === e.placeId || area() === 'alle' || (p.area || 'beide') === 'beide' || p.area === ctxOf(e)).map(p => `<option value="${p.id}" ${!e.group && p.id === e.placeId ? 'selected' : ''}>${p.kind === 'person' ? 'Person: ' : ''}${esc(p.name)}</option>`).join('') + '<option value="__new">Neuer Ort …</option>';
+      const caseOpts = '<option value="">Kein Vorgang</option>' + state.cases.filter(c => c.id === e.caseId || (!c.closed && ctxOf(c) === ctxOf(e))).map(c => `<option value="${c.id}" ${c.id === e.caseId ? 'selected' : ''}>${esc(c.title)}</option>`).join('') + '<option value="__new">Neuer Vorgang …</option>';
       const placeholder = { reminder: 'z. B. Mama zurückrufen', task: 'z. B. Fahrrad aufpumpen', deadline: 'z. B. Antwort an Versicherung', place: 'z. B. Wocheneinkauf', waiting: 'z. B. Erstattung Krankenkasse', contract: 'z. B. Handyvertrag', document: 'z. B. Personalausweis' }[e.type];
       const leadSelect = (opts, label = 'Vorher erinnern') => `<div class="field"><label for="f-lead">${label}</label><select id="f-lead">${opts.map(n => `<option value="${n}" ${n == e.leadDays ? 'selected' : ''}>${n} ${n === 1 ? 'Tag' : 'Tage'} vorher</option>`).join('')}</select></div>`;
       let typeFields = '';
@@ -711,13 +789,13 @@
         <div class="field"><label for="f-items">Liste, eine Zeile pro Punkt</label><textarea id="f-items" placeholder="Milch&#10;Brot&#10;Äpfel">${esc(e.items.map(i => i.text).join('\n'))}</textarea></div>
         <p class="hint">WDID sortiert die Liste nach Abteilungen und lernt, in welcher Reihenfolge du durch deinen Laden gehst.</p>`;
 
-      const photos = e.photos.length ? `<div class="photos">${e.photos.map((p, i) => `<img data-photo="${esc(p)}" data-view="${i}" alt="Foto ${i + 1}">`).join('')}</div>` : '';
+      const photos = mediaThumbs(e.photos);
       const proofFields = !isNew && ['deadline', 'waiting', 'contract', 'task', 'reminder'].includes(e.type) ? `
         <div class="two"><div class="field"><label for="p-method">Erledigt per (Nachweis)</label><select id="p-method"><option value="">—</option>${PROOF.map(m => `<option ${e.proof?.method === m ? 'selected' : ''}>${m}</option>`).join('')}</select></div>
         <div class="field"><label for="p-note">Nachweis-Notiz</label><input id="p-note" value="${esc(e.proof?.note || '')}" placeholder="z. B. Sendungsnummer"></div></div>` : '';
 
       showSheet(`
-        <h3>${isNew ? 'Neuer Eintrag' : 'Bearbeiten'}</h3>
+        <div class="sheet-head"><h3>${isNew ? 'Neuer Eintrag' : 'Bearbeiten'}</h3>${ctxChip(e.context)}</div>
         ${info ? `<p class="hint">${esc(info)}</p>` : ''}
         ${isNew ? `<div class="quick"><input id="f-quick" placeholder="Schnell: Fr 14 Uhr Friseur · bis 15.11. Antrag · bei Kaufland: Milch, Brot" enterkeyhint="done"><button class="btn small" id="quickBtn" type="button">Übernehmen</button></div>` : ''}
         <div class="types">${Object.entries(TYPE).map(([k, v]) => `<button type="button" data-type="${k}" aria-pressed="${e.type === k}"><svg viewBox="0 0 24 24">${v.icon}</svg>${v.label}</button>`).join('')}</div>
@@ -726,11 +804,10 @@
         <div class="field"><label for="f-notes">Details</label><textarea id="f-notes" placeholder="Aktenzeichen, Ansprechpartner, was zu tun ist …">${esc(e.notes)}</textarea></div>
         ${e.type !== 'place' ? `<div class="field"><label for="f-case">Vorgang</label><select id="f-case">${caseOpts}</select></div>
         <div class="field" id="newCaseField" hidden><label for="f-newcase">Name des Vorgangs</label><input id="f-newcase" placeholder="z. B. Kfz-Versicherung Schaden"></div>` : ''}
-        <div class="field"><label>Fotos</label>${photos}<div class="row-actions"><button class="btn small" id="addPhoto" type="button">Foto aufnehmen</button><button class="btn small ghost" id="addPhotoLib" type="button">Aus Fotos</button></div></div>
+        <div class="field"><label>Fotos und Videos</label>${photos}<div class="row-actions"><button class="btn small" id="addPhoto" type="button">Foto</button><button class="btn small" id="addVideo" type="button">Video</button><button class="btn small ghost" id="addPhotoLib" type="button">Aus der Mediathek</button></div></div>
         ${e.type === 'deadline' || e.ocrText ? `<details class="ocr" ${e.ocrText ? '' : 'open'}><summary>${e.ocrText ? 'Erkannter Text aus dem Brief' : 'Brieftext einfügen und auswerten'}</summary>
           ${e.ocrText ? `<pre>${esc(e.ocrText)}</pre>` : `<div class="field"><textarea id="f-ocr" placeholder="Text aus Brief oder E-Mail hier einfügen …"></textarea></div><button class="btn small" id="analyzeBtn" type="button">Auswerten</button>`}</details>` : ''}
         ${proofFields}
-        <div class="field"><label>Bereich</label><div class="seg">${['privat', 'arbeit'].map(c => `<button type="button" data-ctx="${c}" aria-pressed="${e.context === c}">${c === 'privat' ? 'Privat' : 'Arbeit'}</button>`).join('')}</div></div>
         <p class="hint" id="formError" hidden></p>
         <div class="sheet-actions">
           ${isNew ? '<button class="btn ghost" data-close>Abbrechen</button>' : `<button class="btn ghost" id="del">${confirmDel ? 'Wirklich löschen?' : 'Löschen'}</button>`}
@@ -770,9 +847,9 @@
       const text = (v('f-quick') || '').trim();
       if (!text) return;
       const r = L.quickParse(text, { today: t, places: state.places });
-      e.type = r.type; e.title = r.title || e.title; e.date = r.date; e.time = r.time; e.context = r.context; e.repeat = r.repeat;
+      e.type = r.type; e.title = r.title || e.title; e.date = r.date; e.time = r.time; if (r.context === 'arbeit') e.context = 'arbeit'; e.repeat = r.repeat;
       if (r.type === 'place') {
-        if (!r.placeId && r.placeName) { const p = { id: uid(), name: r.placeName, kind: 'store', group: null, lat: null, lng: null, radius: 150 }; state.places.push(p); r.placeId = p.id; }
+        if (!r.placeId && r.placeName) { const p = { id: uid(), name: r.placeName, kind: 'store', group: null, lat: null, lng: null, radius: 150, area: e.context === 'arbeit' ? 'arbeit' : 'beide' }; state.places.push(p); r.placeId = p.id; }
         e.placeId = r.placeId; e.group = null; e.items = r.items.map(text => ({ text, done: false }));
       }
       if (r.type === 'deadline') { e.received = t; e.leadDays = 3; }
@@ -780,17 +857,22 @@
     }
     draw();
 
-    async function addPhoto(camera) {
+    const original = entry ? [...(entry.photos || [])] : [];
+    async function addPhoto(camera, video = false) {
       read();
-      const file = await pickImage({ camera });
+      const file = await pickMedia({ camera, video });
       if (!file) return;
-      try { const b64 = await fileToJpegBase64(file); e.photos.push(await savePhoto(b64)); draw(); } catch (err) { toast(err.message); }
+      try { e.photos.push(await storeMedia(file)); draw(); } catch (err) { toast('Speichern hat nicht geklappt: ' + err.message); }
     }
 
     function onClick(ev) {
       const b = ev.target.closest('button, img[data-view]');
       if (!b) return;
-      if (b.dataset.view !== undefined) { openViewer(b.src); return; }
+      if (b.closest('.viewer')) return;
+      if (b.dataset.view !== undefined) {
+        read();
+        return openViewer(e.photos, +b.dataset.view, { onDelete: i => { e.photos.splice(i, 1); draw(); } });
+      }
       if (b.id === 'quickBtn') return applyQuick();
       if (b.dataset.type) {
         read(); e.type = b.dataset.type;
@@ -801,7 +883,7 @@
         if (e.type === 'place' && !e.placeId && !e.group) e.group = 'supermarkt';
         draw(); return;
       }
-      if (b.dataset.ctx) { read(); e.context = b.dataset.ctx; draw(); return; }
+      if (b.dataset.ctxToggle !== undefined) { read(); e.context = e.context === 'arbeit' ? 'privat' : 'arbeit'; haptic('select'); draw(); return; }
       if (b.id === 'calcBtn') {
         read();
         calcResult = L.computeDeadline({ received: e.received || t, fiction: calc.fiction, n: calc.n, unit: calc.unit, state: state.settings.state });
@@ -816,10 +898,11 @@
       }
       if (b.id === 'addPhoto') return addPhoto(true);
       if (b.id === 'addPhotoLib') return addPhoto(false);
+      if (b.id === 'addVideo') return addPhoto(true, true);
       if (b.id === 'copyBtn') { read(); copyText(entryText(e), 'Eintrag kopiert'); return; }
       if (b.id === 'del') {
         if (!confirmDel) { read(); confirmDel = true; draw(); return; }
-        state.entries = state.entries.filter(x => x.id !== e.id); save(); closeSheet(); toast('Gelöscht'); render(); return;
+        state.entries = state.entries.filter(x => x.id !== e.id); deleteMedia([...original, ...e.photos]); save(); closeSheet(); toast('Gelöscht'); render(); return;
       }
       if (b.id === 'saveBtn') {
         read();
@@ -827,11 +910,11 @@
         const fail = msg => { err.hidden = false; err.textContent = msg; };
         if (e.type === 'place' && v('f-place') === '__new') {
           const name = (v('f-newplace') || '').trim(); if (!name) return fail('Gib dem neuen Ort einen Namen.');
-          const p = { id: uid(), name, kind: 'store', group: null, lat: null, lng: null, radius: 150 }; state.places.push(p); e.placeId = p.id; e.group = null;
+          const p = { id: uid(), name, kind: 'store', group: null, lat: null, lng: null, radius: 150, area: e.context === 'arbeit' ? 'arbeit' : 'beide' }; state.places.push(p); e.placeId = p.id; e.group = null;
         }
         if (v('f-case') === '__new') {
           const name = (v('f-newcase') || '').trim(); if (!name) return fail('Gib dem Vorgang einen Namen.');
-          const c = { id: uid(), title: name, createdAt: Date.now(), closed: false }; state.cases.push(c); e.caseId = c.id;
+          const c = { id: uid(), title: name, createdAt: Date.now(), closed: false, context: ctxOf(e) }; state.cases.push(c); e.caseId = c.id;
         }
         if (!e.title) return fail('Schreib kurz, worum es geht.');
         if (['deadline', 'document'].includes(e.type) && !e.date) return fail('Hier fehlt noch ein Datum.');
@@ -839,6 +922,7 @@
         delete e._calc;
         if (isNew) state.entries.push({ ...e, id: e.id || uid(), done: false, createdAt: Date.now() });
         else Object.assign(state.entries.find(x => x.id === e.id), e);
+        deleteMedia(original.filter(p => !e.photos.includes(p)));
         save(); closeSheet(); toast(isNew ? 'Gespeichert' : 'Geändert'); render();
       }
     }
@@ -849,15 +933,150 @@
     }
   }
 
-  function openViewer(src) {
+  /* ---------- Bildbetrachter: wischen, zoomen, Videos abspielen ---------- */
+  function openViewer(items, start = 0, { onDelete } = {}) {
+    items = [...items];
+    let idx = Math.max(0, Math.min(start, items.length - 1));
     const v = document.createElement('div');
-    v.className = 'viewer'; v.innerHTML = `<img src="${esc(src)}" alt="Foto">`; v.onclick = () => v.remove();
+    v.className = 'viewer'; v.setAttribute('role', 'dialog'); v.setAttribute('aria-label', 'Medien');
+    const x = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    const shareI = '<svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M5 12v8h14v-8"/></svg>';
+    const trashI = '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
+    const draw = () => {
+      v.innerHTML = `<div class="v-strip">${items.map(p => `<div class="v-slide">${isVideo(p)
+          ? `<video data-photo="${esc(p)}" controls playsinline preload="metadata"></video>`
+          : `<img data-photo="${esc(p)}" alt="" draggable="false">`}</div>`).join('')}</div>
+        <div class="v-bar"><button class="v-btn" data-vclose aria-label="Schließen">${x}</button><span class="v-count"></span>
+          <span class="v-actions">${Share && FS ? `<button class="v-btn" data-vshare aria-label="Teilen">${shareI}</button>` : ''}${onDelete ? `<button class="v-btn" data-vdel aria-label="Entfernen">${trashI}</button>` : ''}</span></div>
+        ${items.length > 1 ? `<div class="v-dots">${items.map((_, i) => `<i data-i="${i}"></i>`).join('')}</div>` : ''}`;
+      hydratePhotos(v).then(() => v.querySelectorAll('video').forEach(el => { el.src = el.src.replace(/#t=.*$/, ''); }));
+      go(idx, false);
+    };
+    const strip = () => v.querySelector('.v-strip');
+    const slide = () => v.querySelectorAll('.v-slide')[idx];
+    const media = () => slide()?.firstElementChild;
+    let z = { s: 1, x: 0, y: 0 }, armedDel = false;
+    const applyZoom = (anim) => {
+      const m = media(); if (!m || m.tagName !== 'IMG') return;
+      m.style.transition = anim ? 'transform .28s cubic-bezier(.22,.8,.24,1)' : 'none';
+      m.style.transform = `translate(${z.x}px, ${z.y}px) scale(${z.s})`;
+      v.classList.toggle('zoomed', z.s > 1.01);
+    };
+    const clampPan = () => {
+      const m = media(); if (!m) return;
+      const mx = Math.max(0, (m.offsetWidth * z.s - innerWidth) / 2), my = Math.max(0, (m.offsetHeight * z.s - innerHeight) / 2);
+      z.x = Math.max(-mx, Math.min(mx, z.x)); z.y = Math.max(-my, Math.min(my, z.y));
+    };
+    function go(i, anim = true) {
+      if (i !== idx) { const m = media(); if (m) { if (m.tagName === 'VIDEO') m.pause(); else { m.style.transform = ''; } } z = { s: 1, x: 0, y: 0 }; v.classList.remove('zoomed'); }
+      idx = Math.max(0, Math.min(items.length - 1, i));
+      const st = strip(); st.style.transition = anim && motionOn() ? 'transform .34s cubic-bezier(.22,.8,.24,1)' : 'none';
+      st.style.transform = `translateX(${-idx * 100}%)`;
+      v.querySelector('.v-count').textContent = items.length > 1 ? `${idx + 1} / ${items.length}` : '';
+      v.querySelectorAll('.v-dots i').forEach((d, k) => d.classList.toggle('on', k === idx));
+      armedDel = false; v.querySelector('[data-vdel]')?.classList.remove('armed');
+    }
+    function close() {
+      v.querySelectorAll('video').forEach(el => el.pause());
+      document.removeEventListener('keydown', onKey);
+      if (!motionOn()) return v.remove();
+      v.classList.add('closing'); setTimeout(() => v.remove(), 220);
+    }
+    const onKey = ev => { if (ev.key === 'Escape') close(); if (ev.key === 'ArrowRight') go(idx + 1); if (ev.key === 'ArrowLeft') go(idx - 1); };
+    document.addEventListener('keydown', onKey);
+
+    v.addEventListener('click', async ev => {
+      const b = ev.target.closest('button, .v-dots i'); if (!b) return;
+      ev.stopPropagation();
+      if (b.dataset.vclose !== undefined) return close();
+      if (b.dataset.i !== undefined) return go(+b.dataset.i);
+      if (b.dataset.vshare !== undefined) {
+        try { const { uri } = await FS.getUri({ path: items[idx], directory: 'DATA' }); await Share.share({ files: [uri] }); } catch (err) { if (!/cancel/i.test(err.message || '')) toast('Teilen hat nicht geklappt'); }
+        return;
+      }
+      if (b.dataset.vdel !== undefined) {
+        if (!armedDel) { armedDel = true; b.classList.add('armed'); haptic('medium'); toast('Nochmal tippen zum Entfernen'); return; }
+        onDelete(idx); items.splice(idx, 1);
+        if (!items.length) return close();
+        idx = Math.min(idx, items.length - 1); draw();
+      }
+    });
+
+    // Gesten: ein Finger wischt (oder verschiebt im Zoom), zwei Finger zoomen, Doppeltipp zoomt, nach unten ziehen schließt
+    const pts = new Map();
+    let g = null, lastTap = 0;
+    const mid = () => { const a = [...pts.values()]; return { x: (a[0].x + a[1].x) / 2, y: (a[0].y + a[1].y) / 2, d: Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) }; };
+    v.addEventListener('pointerdown', ev => {
+      if (ev.target.closest('button, video, .v-dots')) return;
+      v.setPointerCapture?.(ev.pointerId);
+      pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      if (pts.size === 2) { const m = mid(); g = { kind: 'pinch', m, s: z.s, x: z.x, y: z.y }; }
+      else if (pts.size === 1) g = { kind: null, x0: ev.clientX, y0: ev.clientY, t0: Date.now(), zx: z.x, zy: z.y };
+    });
+    v.addEventListener('pointermove', ev => {
+      if (!pts.has(ev.pointerId) || !g) return;
+      pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      if (g.kind === 'pinch' && pts.size === 2) {
+        const m = mid(), cx = innerWidth / 2, cy = innerHeight / 2;
+        const s2 = Math.max(1, Math.min(5, g.s * m.d / g.m.d));
+        const lx = (g.m.x - cx - g.x) / g.s, ly = (g.m.y - cy - g.y) / g.s;
+        z = { s: s2, x: m.x - cx - s2 * lx, y: m.y - cy - s2 * ly }; clampPan(); applyZoom(false); return;
+      }
+      const dx = ev.clientX - g.x0, dy = ev.clientY - g.y0;
+      if (!g.kind) {
+        if (Math.hypot(dx, dy) < 8) return;
+        g.kind = z.s > 1.01 ? 'pan' : Math.abs(dx) > Math.abs(dy) ? 'swipe' : dy > 0 ? 'down' : 'none';
+      }
+      if (g.kind === 'pan') { z.x = g.zx + dx; z.y = g.zy + dy; clampPan(); applyZoom(false); }
+      if (g.kind === 'swipe') {
+        const edge = (idx === 0 && dx > 0) || (idx === items.length - 1 && dx < 0);
+        const st = strip(); st.style.transition = 'none';
+        st.style.transform = `translateX(calc(${-idx * 100}% + ${edge ? dx / 3 : dx}px))`;
+      }
+      if (g.kind === 'down') {
+        const sl = slide(); sl.style.transition = 'none';
+        sl.style.transform = `translateY(${dy}px) scale(${1 - Math.min(dy, 400) / 2000})`;
+        v.style.background = `rgba(0,0,0,${Math.max(0, 1 - dy / 500)})`;
+      }
+    });
+    const end = ev => {
+      if (!pts.has(ev.pointerId)) return;
+      pts.delete(ev.pointerId);
+      if (!g) return;
+      if (g.kind === 'pinch') {
+        if (pts.size === 0) { if (z.s < 1.05) z = { s: 1, x: 0, y: 0 }; clampPan(); applyZoom(true); g = null; }
+        else { const p = [...pts.values()][0]; g = { kind: 'pan', x0: p.x, y0: p.y, zx: z.x, zy: z.y }; }
+        return;
+      }
+      if (pts.size) return;
+      const dx = ev.clientX - g.x0, dy = ev.clientY - g.y0, dt = Date.now() - g.t0;
+      if (g.kind === 'swipe') {
+        const fast = Math.abs(dx) / Math.max(dt, 1) > .5;
+        go(Math.abs(dx) > innerWidth * .22 || fast ? idx + (dx < 0 ? 1 : -1) : idx);
+      } else if (g.kind === 'down') {
+        const sl = slide();
+        if (dy > 110) { close(); }
+        else { sl.style.transition = 'transform .25s cubic-bezier(.22,.8,.24,1)'; sl.style.transform = ''; v.style.removeProperty('background'); }
+      } else if (!g.kind && dt < 300) {
+        // Doppeltipp: auf die Stelle zoomen oder zurück
+        if (Date.now() - lastTap < 300 && media()?.tagName === 'IMG') {
+          lastTap = 0;
+          if (z.s > 1.01) z = { s: 1, x: 0, y: 0 };
+          else { const s2 = 2.5, cx = innerWidth / 2, cy = innerHeight / 2; z = { s: s2, x: -(ev.clientX - cx) * (s2 - 1), y: -(ev.clientY - cy) * (s2 - 1) }; clampPan(); }
+          applyZoom(true); haptic('select');
+        } else lastTap = Date.now();
+      }
+      g = null;
+    };
+    v.addEventListener('pointerup', end);
+    v.addEventListener('pointercancel', end);
     document.body.appendChild(v);
+    draw();
   }
 
   function openPlaceSheet(place) {
     const isNew = !place;
-    const p = place ? { ...place } : { id: uid(), name: '', kind: 'store', group: null, lat: null, lng: null, radius: 150 };
+    const p = place ? { ...place } : { id: uid(), name: '', kind: 'store', group: null, lat: null, lng: null, radius: 150, area: area() === 'arbeit' ? 'arbeit' : 'beide' };
     let confirmDel = false;
     const draw = () => showSheet(`
       <h3>${isNew ? 'Ort hinzufügen' : 'Ort bearbeiten'}</h3>
@@ -866,12 +1085,14 @@
       ${p.kind === 'store' ? `<div class="field"><label for="o-group">Gehört zu</label><select id="o-group"><option value="">Keine Gruppe</option>${Object.entries(GROUPS).map(([g, n]) => `<option value="${g}" ${p.group === g ? 'selected' : ''}>${n}</option>`).join('')}</select></div>` : ''}
       ${p.kind !== 'person' ? `<div class="field"><label for="o-radius">Radius</label><select id="o-radius">${[100, 150, 200, 300, 500].map(r => `<option value="${r}" ${p.radius == r ? 'selected' : ''}>${r} m</option>`).join('')}</select></div>
       <p class="hint">${p.lat != null ? 'Standort ist gespeichert.' : 'Den Standort speicherst du, wenn du dort bist: „Standort hier speichern“.'}</p>` : '<p class="hint">Listen für Personen erscheinen unter „Wenn du … siehst“.</p>'}
+      <div class="field"><label>Zeigen in</label><div class="seg">${[['beide', 'Beiden Bereichen'], ['privat', 'Privat'], ['arbeit', 'Arbeit']].map(([k, l]) => `<button type="button" data-parea="${k}" aria-pressed="${(p.area || 'beide') === k}">${l}</button>`).join('')}</div></div>
       <p class="hint" id="formError" hidden></p>
       <div class="sheet-actions">${isNew ? '<button class="btn ghost" data-close>Abbrechen</button>' : `<button class="btn ghost" id="delPlace">${confirmDel ? 'Wirklich löschen?' : 'Löschen'}</button>`}<button class="btn primary" id="savePlace">Speichern</button></div>`,
       'Ort', ev => {
         const b = ev.target.closest('button'); if (!b) return;
         const read = () => { p.name = (document.getElementById('o-name').value || '').trim(); const g = document.getElementById('o-group'); p.group = g ? (g.value || null) : null; const r = document.getElementById('o-radius'); if (r) p.radius = Number(r.value); };
         if (b.dataset.kind) { read(); p.kind = b.dataset.kind; if (p.kind !== 'store') p.group = null; draw(); }
+        if (b.dataset.parea) { read(); p.area = b.dataset.parea; draw(); }
         if (b.id === 'delPlace') {
           if (!confirmDel) { read(); confirmDel = true; draw(); return; }
           state.places = state.places.filter(x => x.id !== p.id);
@@ -894,21 +1115,24 @@
       const es = state.entries.filter(e => e.caseId === c.id).sort((a, b) => (a.received || a.date || '').localeCompare(b.received || b.date || '') || a.createdAt - b.createdAt);
       const photos = es.flatMap(e => e.photos || []);
       showSheet(`
-        <div class="field"><label for="v-title">Vorgang</label><input id="v-title" value="${esc(c.title)}"></div>
-        ${photos.length ? `<div class="photos">${photos.map((p, i) => `<img data-photo="${esc(p)}" data-view="${i}" alt="Foto">`).join('')}</div>` : ''}
+        <div class="sheet-head"><h3>Vorgang</h3>${ctxChip(ctxOf(c))}</div>
+        <div class="field"><label for="v-title" class="sr-only">Name</label><input id="v-title" value="${esc(c.title)}"></div>
+        ${mediaThumbs(photos)}
         <ul class="timeline">${es.map(e => `<li><span class="when">${(e.received || e.date) ? parse(e.received || e.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'}</span>
           <div class="body" data-editcase="${e.id}" style="cursor:pointer"><div class="title">${esc(e.title)}${e.done ? ' ✓' : ''}</div><div class="desc">${TYPE[e.type].label}${e.date && e.type === 'deadline' ? ` · Frist ${fmtDate(e.date)}` : ''}${e.proof ? ` · ${esc(e.proof.method)}` : ''}</div></div></li>`).join('') || '<li><span></span><span class="sub">Noch keine Einträge.</span></li>'}</ul>
         <div class="row-actions"><button class="btn small" id="caseAdd">Eintrag hinzufügen</button><button class="btn small" id="caseScan">Brief scannen</button><button class="btn small ghost" id="caseCopy">Kopieren</button></div>
         <div class="sheet-actions"><button class="btn ghost" id="caseClose">${confirmClose ? 'Wirklich abschließen?' : 'Abschließen'}</button><button class="btn primary" id="caseSave">Fertig</button></div>`,
         'Vorgang', async ev => {
           const b = ev.target.closest('button, img[data-view], [data-editcase]'); if (!b) return;
+          if (b.dataset.view !== undefined && b.closest('.photos')) return openViewer(photos, +b.dataset.view);
           const title = (document.getElementById('v-title').value || '').trim(); if (title) c.title = title;
-          if (b.dataset.view !== undefined) return openViewer(b.src);
+          if (b.dataset.view !== undefined) return openViewer(photos, +b.dataset.view);
+          if (b.dataset.ctxToggle !== undefined) { c.context = ctxOf(c) === 'arbeit' ? 'privat' : 'arbeit'; es.forEach(e => { e.context = c.context; }); save(); haptic('select'); return draw(); }
           if (b.dataset.editcase) { save(); return openSheet(state.entries.find(e => e.id === b.dataset.editcase)); }
           if (b.id === 'caseAdd') { save(); return openSheet(null, { type: 'task', caseId: c.id }); }
           if (b.id === 'caseScan') { save(); closeSheet(); const before = state.entries.length; await scanLetter(); return; }
           if (b.id === 'caseCopy') return copyText(`Vorgang: ${c.title}\n\n` + es.map(entryText).join('\n\n'), 'Vorgang kopiert');
-          if (b.id === 'caseClose') { if (!confirmClose) { confirmClose = true; draw(); return; } c.closed = true; logDone({ id: c.id, type: 'case' }, `Vorgang abgeschlossen: ${c.title}`); save(); closeSheet(); render(); return; }
+          if (b.id === 'caseClose') { if (!confirmClose) { confirmClose = true; draw(); return; } c.closed = true; logDone({ id: c.id, type: 'case', context: ctxOf(c) }, `Vorgang abgeschlossen: ${c.title}`); save(); closeSheet(); render(); return; }
           if (b.id === 'caseSave') { save(); closeSheet(); render(); }
         });
       hydratePhotos(sheetRoot);
@@ -919,7 +1143,7 @@
   function openReview() {
     const draw = () => {
       const t = today(), m = dayModel(t);
-      const done = state.log.filter(l => iso(new Date(l.at)) === t);
+      const done = state.log.filter(l => iso(new Date(l.at)) === t && logInArea(l));
       const open = [...m.overdue, ...m.todays.filter(e => !e.done && e.type !== 'deadline')];
       showSheet(`
         <h3>Tagesrückblick</h3>
@@ -957,8 +1181,8 @@
       <div class="setting"><div><div class="title">Bundesland</div><div class="hint">Für Feiertage im Fristrechner</div></div><select id="s-state">${Object.entries(L.STATES).map(([k, n]) => `<option value="${k}" ${s.state === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
       <div class="setting"><div><div class="title">Morgen-Briefing</div><div class="hint">Eine Mitteilung mit allem für den Tag</div></div><div class="row-actions" style="margin:0"><input type="time" id="s-morningTime" value="${s.morningTime}">${sw('s-morningOn', s.morningOn)}</div></div>
       <div class="setting"><div><div class="title">Tagesabschluss</div><div class="hint">Rückblick und Offenes verschieben</div></div><div class="row-actions" style="margin:0"><input type="time" id="s-eveningTime" value="${s.eveningTime}">${sw('s-eveningOn', s.eveningOn)}</div></div>
-      <div class="setting"><div><div class="title">Arbeit nach Feierabend ausblenden</div><div class="hint">Mo–Fr, außerhalb der Arbeitszeit</div></div>${sw('s-workFilter', s.workFilter)}</div>
-      <div class="setting"><div><div class="title">Arbeitszeit</div></div><div class="row-actions" style="margin:0"><input type="time" id="s-workStart" value="${s.workStart}"><input type="time" id="s-workEnd" value="${s.workEnd}"></div></div>
+      <div class="setting"><div><div class="title">Bereich automatisch wechseln</div><div class="hint">In der Arbeitszeit Arbeit, danach Privat. Von Hand umschalten geht immer.</div></div>${sw('s-autoArea', s.autoArea)}</div>
+      <div class="setting"><div><div class="title">Arbeitszeit</div><div class="chips" style="margin-top:6px">${[1, 2, 3, 4, 5, 6, 0].map(d => `<button type="button" class="chip" data-workday="${d}" aria-pressed="${s.workDays.includes(d)}">${['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][d]}</button>`).join('')}</div></div><div class="row-actions" style="margin:0"><input type="time" id="s-workStart" value="${s.workStart}"><input type="time" id="s-workEnd" value="${s.workEnd}"></div></div>
       ${native ? `<div class="setting"><div><div class="title">Mit Face ID sperren</div><div class="hint">Beim Öffnen der App</div></div>${sw('s-lock', s.lock)}</div>` : ''}
       <div class="dept">Backup</div>
       <div class="field"><label for="b-pass">Passwort für das Backup (optional)</label><input id="b-pass" type="password" autocomplete="new-password" placeholder="Leer lassen für unverschlüsselt"></div>
@@ -969,6 +1193,10 @@
       <div class="sheet-actions"><button class="btn primary" data-close>Fertig</button></div>`,
       'Einstellungen', async ev => {
         const b = ev.target.closest('button'); if (!b) return;
+        if (b.dataset.workday) {
+          const d = +b.dataset.workday; s.workDays = s.workDays.includes(d) ? s.workDays.filter(x => x !== d) : [...s.workDays, d];
+          b.setAttribute('aria-pressed', s.workDays.includes(d)); save(); return;
+        }
         if (b.dataset.themePick) {
           s.theme = b.dataset.themePick; save(); applyLook(true); haptic('select');
           sheetRoot.querySelectorAll('[data-theme-pick]').forEach(x => x.setAttribute('aria-pressed', x === b));
@@ -985,6 +1213,7 @@
         }
         s[k] = ev.target.type === 'checkbox' ? ev.target.checked : ev.target.value;
         if (k === 'motion') applyLook(false);
+        if (k === 'autoArea' && s.autoArea) { lastAuto = null; autoSwitchArea(); }
         if (k === 'haptics' && s.haptics) haptic('medium');
         save(); render();
       });
@@ -1000,7 +1229,8 @@
     try {
       toast('Backup wird erstellt …');
       const photos = {};
-      for (const p of new Set(state.entries.flatMap(e => e.photos || []))) { try { photos[p] = await readPhotoBase64(p); } catch {} }
+      // Videos bleiben draußen, sonst wird das Backup riesig
+      for (const p of new Set(state.entries.flatMap(e => e.photos || []).filter(p => !isVideo(p)))) { try { photos[p] = await readPhotoBase64(p); } catch {} }
       const payload = JSON.stringify({ app: 'WDID', version: 2, createdAt: new Date().toISOString(), state, photos });
       let file;
       if (pass) {
@@ -1142,7 +1372,7 @@
     if (!bars.length) return;
     requestAnimationFrame(() => requestAnimationFrame(() => bars.forEach(b => { b.style.width = (+b.dataset.v * 100) + '%'; progressMemo[b.dataset.prog] = +b.dataset.v; })));
   }
-  const dayOpenCount = () => { const m = dayModel(today()); return [...m.overdue, ...m.todays].filter(e => !e.done && !isHiddenByWork(e)).length; };
+  const dayOpenCount = () => { const m = dayModel(today()); return [...m.overdue, ...m.todays].filter(e => !e.done).length; };
 
   /* ---------- Toast ---------- */
   let toastTimer;
@@ -1170,6 +1400,8 @@
       enterTimer = setTimeout(() => app.classList.remove('enter'), 900);
     } else app.classList.remove('enter');
     settleProgress();
+    const sw = app.querySelector('.areas');
+    if (sw) requestAnimationFrame(() => { sw.style.setProperty('--pos', sw.dataset.pos); areaMemo = +sw.dataset.pos; });
   }
   const goTab = t => { if (t !== tab) haptic('select'); tab = t; render({ enter: true }); window.scrollTo(0, 0); };
   document.querySelector('nav.tabs').onclick = ev => { const b = ev.target.closest('button'); if (b) goTab(b.dataset.tab); };
@@ -1177,6 +1409,8 @@
 
   let resetArmed = false;
   app.addEventListener('click', ev => {
+    const ab = ev.target.closest('button[data-area]');
+    if (ab) return setArea(ab.dataset.area);
     const el = ev.target.closest('[data-done],[data-edit],[data-goto],[data-filter],[data-pin],[data-clear],[data-copylist],[data-addlist],[data-newlist],[data-editplace],[data-suggest],[data-paper],[data-case],[data-newtype],[data-review],#copyDay,#showWork,#locate,#reset,#addPlace,#askAlways,#scan,#newCase,#openSettings');
     if (!el) return;
     const d = el.dataset;
@@ -1209,18 +1443,17 @@
     if (d.editplace) return openPlaceSheet(placeById(d.editplace));
     if (d.suggest) { const l = state.entries.find(e => e.id === d.suggest); const name = d.name.charAt(0).toUpperCase() + d.name.slice(1); l.items.push({ text: name, done: false }); save(); toast(`${name} hinzugefügt`); return render(); }
     if (el.id === 'copyDay') return copyText(dayText(), 'Tag kopiert');
-    if (el.id === 'showWork') { showWorkAnyway = true; return render(); }
     if (el.id === 'locate') return locate();
     if (el.id === 'addPlace') return openPlaceSheet(null);
     if (el.id === 'askAlways') return Native.requestAlwaysLocation().then(refreshLocationStatus).then(render);
     if (el.id === 'scan') return scanLetter();
     if (el.id === 'openSettings') return openSettings();
     if (el.id === 'newCase') {
-      const c = { id: uid(), title: 'Neuer Vorgang', createdAt: Date.now(), closed: false }; state.cases.push(c); save(); render(); return openCaseSheet(c);
+      const c = { id: uid(), title: 'Neuer Vorgang', createdAt: Date.now(), closed: false, context: defaultCtx() }; state.cases.push(c); save(); render(); return openCaseSheet(c);
     }
     if (el.id === 'reset') {
       if (!resetArmed) { resetArmed = true; el.textContent = 'Tippe nochmal zum Bestätigen'; return; }
-      resetArmed = false; const look = { theme: state.settings.theme, motion: state.settings.motion, haptics: state.settings.haptics }; state = blank(); Object.assign(state.settings, look); ensureResignEntry(); save(); toast('Gelöscht'); render();
+      resetArmed = false; const look = { theme: state.settings.theme, motion: state.settings.motion, haptics: state.settings.haptics, area: state.settings.area, autoArea: state.settings.autoArea }; state = blank(); Object.assign(state.settings, look); ensureResignEntry(); save(); toast('Gelöscht'); render();
     }
   });
   let listTimer;
@@ -1246,6 +1479,7 @@
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { lockedAt = Date.now(); return; }
+    autoSwitchArea();
     refreshLocationStatus().then(render);
     if (Date.now() - lockedAt > 60e3) lockIfNeeded(true);
   });
@@ -1270,6 +1504,7 @@
 
   ensureResignEntry();
   applyLook(false);
+  autoSwitchArea(); applyArea();
   await refreshLocationStatus();
   if (native) save();
   render({ enter: true });
