@@ -65,7 +65,9 @@
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>WDID meldet sich, wenn du an einem gespeicherten Ort wie deinem Supermarkt ankommst, auch wenn die App geschlossen ist. Der Standort verlässt dein iPhone nicht.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>WDID fotografiert Briefe und Belege, um Fristen und Aktenzeichen zu erkennen. Die Fotos bleiben auf deinem iPhone.</string>
+	<string>WDID nimmt Fotos und Videos zu deinen Einträgen auf und liest Briefe, um Fristen und Aktenzeichen zu erkennen. Alles bleibt auf deinem iPhone.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Für den Ton, wenn du ein Video zu einem Eintrag aufnimmst. Die Aufnahme bleibt auf deinem iPhone.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>WDID schützt deine Briefe, Verträge und Dokumente mit Face ID.</string>
 	<key>CFBundleURLTypes</key>
