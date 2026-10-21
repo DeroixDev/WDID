@@ -1037,6 +1037,43 @@
     sheetRoot.onclick = ev => { if (ev.target.closest('[data-close]')) return closeSheet(); onClick && onClick(ev); };
     sheetRoot.onchange = onChange || null;
     sheetRoot.onkeydown = null;
+    dragToClose(sheetRoot.querySelector('.sheet'));
+  }
+  // oben am Strich (und an der Kopfzeile) nach unten wischen schließt das Sheet
+  function dragToClose(sh) {
+    const scrim = sheetRoot.querySelector('.scrim');
+    let y0 = null, t0 = 0, dy = 0;
+    sh.addEventListener('touchstart', ev => {
+      const top = sh.getBoundingClientRect().top, y = ev.touches[0].clientY;
+      const inHandle = y - top < 64 || (sh.scrollTop <= 0 && ev.target.closest('.sheet-head'));
+      if (!inHandle || ev.touches.length > 1 || ev.target.closest('input, select, textarea')) return;
+      y0 = y; t0 = Date.now(); dy = 0;
+    }, { passive: true });
+    sh.addEventListener('touchmove', ev => {
+      if (y0 === null) return;
+      dy = Math.max(0, ev.touches[0].clientY - y0);
+      if (dy > 0) ev.preventDefault();
+      sh.classList.add('dragging');
+      sh.style.transform = `translateY(${dy}px)`;
+      if (scrim) scrim.style.opacity = String(Math.max(0, 1 - dy / 400));
+    }, { passive: false });
+    const end = () => {
+      if (y0 === null) return;
+      const fast = dy / Math.max(1, Date.now() - t0) > .5;
+      y0 = null; sh.classList.remove('dragging');
+      if (dy > 110 || (fast && dy > 30)) {
+        haptic('light');
+        sh.style.transition = 'transform .22s cubic-bezier(.4, 0, .9, .6)'; sh.style.transform = 'translateY(100%)';
+        if (scrim) { scrim.style.transition = 'opacity .22s'; scrim.style.opacity = '0'; }
+        sheetRoot.onclick = sheetRoot.onchange = sheetRoot.onkeydown = null;
+        clearTimeout(sheetTimer); sheetTimer = setTimeout(() => { if (sheetRoot.contains(sh)) sheetRoot.innerHTML = ''; }, 230);
+      } else {
+        sh.style.transition = 'transform .3s cubic-bezier(.2, .9, .3, 1)'; sh.style.transform = '';
+        if (scrim) { scrim.style.transition = 'opacity .3s'; scrim.style.opacity = ''; }
+      }
+      dy = 0;
+    };
+    sh.addEventListener('touchend', end); sh.addEventListener('touchcancel', end);
   }
   function closeSheet() {
     sheetRoot.onclick = sheetRoot.onchange = sheetRoot.onkeydown = null;
