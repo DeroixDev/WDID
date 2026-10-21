@@ -4,6 +4,7 @@ import CoreLocation
 import UserNotifications
 import Vision
 import LocalAuthentication
+import WebKit
 
 /// Ankunftserkennung über die Regionsüberwachung von iOS.
 /// Lebt unabhängig von der Web-Oberfläche, weil iOS die App bei Ankunft im Hintergrund startet,
@@ -48,17 +49,45 @@ final class GeofenceManager: NSObject, CLLocationManagerDelegate {
             let radius = min(max(entry["radius"] as? Double ?? 150, 100), manager.maximumRegionMonitoringDistance)
             let region = CLCircularRegion(center: CLLocationCoordinate2D(latitude: lat, longitude: lng), radius: radius, identifier: prefix + id)
             region.notifyOnEntry = true
-            region.notifyOnExit = false
+            // Orte mit Arbeitszeiterfassung melden auch das Verlassen
+            region.notifyOnExit = (entry["track"] as? Double ?? 0) > 0
             manager.startMonitoring(for: region)
         }
     }
 
-    func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
-        guard region.identifier.hasPrefix(prefix) else { return }
+    private let workKey = "wdid.workEvents"
+
+    private func entry(for region: CLRegion) -> (String, [String: Any])? {
+        guard region.identifier.hasPrefix(prefix) else { return nil }
         let id = String(region.identifier.dropFirst(prefix.count))
         guard let list = UserDefaults.standard.array(forKey: storeKey) as? [[String: Any]],
-              let entry = list.first(where: { ($0["id"] as? String) == id }),
-              let body = entry["body"] as? String, !body.isEmpty else { return }
+              let entry = list.first(where: { ($0["id"] as? String) == id }) else { return nil }
+        return (id, entry)
+    }
+
+    /// Kommen und Gehen für die Arbeitszeit; die App holt die Liste beim nächsten Öffnen ab.
+    private func recordWork(_ type: String, _ id: String) {
+        var events = UserDefaults.standard.array(forKey: workKey) as? [[String: Any]] ?? []
+        events.append(["type": type, "id": id, "at": Date().timeIntervalSince1970 * 1000])
+        UserDefaults.standard.set(Array(events.suffix(200)), forKey: workKey)
+    }
+
+    func takeWorkEvents() -> [[String: Any]] {
+        let events = UserDefaults.standard.array(forKey: workKey) as? [[String: Any]] ?? []
+        UserDefaults.standard.removeObject(forKey: workKey)
+        return events
+    }
+
+    func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
+        guard let found = entry(for: region), (found.1["track"] as? Double ?? 0) > 0 else { return }
+        recordWork("exit", found.0)
+    }
+
+    func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
+        guard let found = entry(for: region) else { return }
+        let (id, entry) = found
+        if (entry["track"] as? Double ?? 0) > 0 { recordWork("enter", id) }
+        guard let body = entry["body"] as? String, !body.isEmpty else { return }
 
         // Höchstens eine Mitteilung pro Ort alle zwei Stunden
         let lastKey = "wdid.geofence.last." + id
@@ -87,8 +116,61 @@ public class WDIDNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "recognizeText", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "authenticate", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "biometryType", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "setBackground", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "setBackground", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "detectCodes", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "makePdf", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "takeWorkEvents", returnType: CAPPluginReturnPromise)
     ]
+
+    @objc func takeWorkEvents(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            call.resolve(["events": GeofenceManager.shared.takeWorkEvents()])
+        }
+    }
+
+    /// Barcodes und QR-Codes auf Etiketten, ohne Internet
+    @objc func detectCodes(_ call: CAPPluginCall) {
+        guard let b64 = call.getString("base64"),
+              let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters),
+              let image = UIImage(data: data),
+              let cgImage = image.cgImage else {
+            call.reject("Das Bild konnte nicht gelesen werden.")
+            return
+        }
+        let request = VNDetectBarcodesRequest { request, error in
+            if let error = error {
+                call.reject(error.localizedDescription)
+                return
+            }
+            var seen = Set<String>()
+            let codes = ((request.results as? [VNBarcodeObservation]) ?? [])
+                .compactMap { $0.payloadStringValue?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && seen.insert($0).inserted }
+            call.resolve(["codes": codes])
+        }
+        let orientation = CGImagePropertyOrientation(image.imageOrientation)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try VNImageRequestHandler(cgImage: cgImage, orientation: orientation).perform([request])
+            } catch {
+                call.reject(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Macht aus HTML ein mehrseitiges A4-PDF im temporären Ordner
+    @objc func makePdf(_ call: CAPPluginCall) {
+        guard let html = call.getString("html") else {
+            call.reject("Kein Inhalt")
+            return
+        }
+        let name = call.getString("name") ?? "WDID-Bericht"
+        DispatchQueue.main.async {
+            PDFMaker().make(html: html, name: name, host: self.bridge?.viewController?.view) { url, error in
+                if let url = url { call.resolve(["uri": url.absoluteString]) } else { call.reject(error ?? "PDF fehlgeschlagen") }
+            }
+        }
+    }
 
     /// Theme-Farbe als Hex (#RRGGBB) für den nativen Hintergrund
     @objc func setBackground(_ call: CAPPluginCall) {
@@ -198,5 +280,67 @@ extension CGImagePropertyOrientation {
         case .rightMirrored: self = .rightMirrored
         @unknown default: self = .up
         }
+    }
+}
+
+/// Lädt HTML in eine unsichtbare Webansicht und druckt sie seitenweise in ein PDF.
+final class PDFMaker: NSObject, WKNavigationDelegate {
+    private static var running: [PDFMaker] = []
+    private var webView: WKWebView?
+    private var name = "WDID-Bericht"
+    private var completion: ((URL?, String?) -> Void)?
+
+    func make(html: String, name: String, host: UIView?, completion: @escaping (URL?, String?) -> Void) {
+        self.name = name
+        self.completion = completion
+        let webView = WKWebView(frame: CGRect(x: -2000, y: 0, width: 595, height: 842))
+        webView.navigationDelegate = self
+        webView.isHidden = true
+        host?.addSubview(webView)
+        self.webView = webView
+        PDFMaker.running.append(self)
+        webView.loadHTMLString(html, baseURL: nil)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // Bilder kurz dekodieren lassen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.render() }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        finish(nil, error.localizedDescription)
+    }
+
+    private func render() {
+        guard let webView = webView else { return }
+        let renderer = UIPrintPageRenderer()
+        renderer.addPrintFormatter(webView.viewPrintFormatter(), startingAtPageAt: 0)
+        let page = CGRect(x: 0, y: 0, width: 595.2, height: 841.8)
+        renderer.setValue(NSValue(cgRect: page), forKey: "paperRect")
+        renderer.setValue(NSValue(cgRect: page.insetBy(dx: 42, dy: 48)), forKey: "printableRect")
+        let data = NSMutableData()
+        UIGraphicsBeginPDFContextToData(data, page, [kCGPDFContextTitle as String: name, kCGPDFContextCreator as String: "WDID"])
+        renderer.prepare(forDrawingPages: NSRange(location: 0, length: renderer.numberOfPages))
+        for index in 0..<renderer.numberOfPages {
+            UIGraphicsBeginPDFPage()
+            renderer.drawPage(at: index, in: UIGraphicsGetPDFContextBounds())
+        }
+        UIGraphicsEndPDFContext()
+        let file = name.replacingOccurrences(of: "/", with: "-")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(file + ".pdf")
+        do {
+            try data.write(to: url, options: .atomic)
+            finish(url, nil)
+        } catch {
+            finish(nil, error.localizedDescription)
+        }
+    }
+
+    private func finish(_ url: URL?, _ error: String?) {
+        completion?(url, error)
+        completion = nil
+        webView?.removeFromSuperview()
+        webView = nil
+        PDFMaker.running.removeAll { $0 === self }
     }
 }

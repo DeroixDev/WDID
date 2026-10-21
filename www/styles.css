@@ -316,3 +316,30 @@ nav.tabs button[aria-current="page"] svg { animation: tabPop .4s var(--spring); 
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 /* im Arbeitsbereich übernimmt Fjordblau die Akzentfarbe, damit du auf einen Blick siehst, wo du bist */
 :root[data-area="arbeit"] { --accent: var(--work); --accent-soft: var(--work-soft); }
+
+/* ---------- Arbeitsalltag ---------- */
+.segmented.compact { margin: -6px 0 16px; }
+.segmented.compact .chip { padding: 5px 14px; }
+.banner.timer b { font-family: var(--f-mono); font-weight: 500; font-variant-numeric: tabular-nums; }
+.work-card .big { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.work-card .big span { font-family: var(--f-mono); font-weight: 500; font-size: 24px; }
+.tag.mono { font-family: var(--f-mono); letter-spacing: .02em; }
+button.tag { border: 0; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
+.tag.person { background: var(--work-soft); color: var(--work); }
+.tag.person::before { content: "@"; opacity: .6; margin-right: 1px; }
+.btn.icon { padding: 6px 10px; display: grid; place-items: center; }
+.btn.icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+.icon-btn.small { padding: 2px; margin-left: auto; }
+.icon-btn.small svg { width: 16px; height: 16px; }
+.checklist li .icon-btn.small { opacity: .55; }
+.empty.small { padding: 10px 0; font-size: 14px; }
+.chip.tpl { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 500; }
+.chip.tpl::before { content: "▦ "; opacity: .6; }
+a.btn { text-decoration: none; color: inherit; display: inline-block; }
+label.inline.hint { display: flex; gap: 8px; align-items: flex-start; }
+label.inline.hint input { margin-top: 3px; }
+.v-cap { position: absolute; left: 0; right: 0; bottom: calc(env(safe-area-inset-bottom, 0px) + 46px); text-align: center; font-size: 12px; color: rgba(255,255,255,.75); padding: 0 16px; pointer-events: none; transition: opacity .2s; }
+.viewer.zoomed .v-cap { opacity: 0; }
+.field .checklist input[type="checkbox"] { width: 22px; height: 22px; padding: 0; border-radius: 7px; }
+.field .quick .btn.icon { flex: none; }
+.field .checklist label { text-transform: none; letter-spacing: 0; font-size: 15px; color: inherit; font-weight: 400; }

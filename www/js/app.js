@@ -50,18 +50,26 @@
   /* ---------- Daten ---------- */
   const DEFAULT_SETTINGS = { state: 'NW', morningOn: true, morningTime: '07:30', eveningOn: true, eveningTime: '20:30',
     lock: false, workStart: '08:00', workEnd: '17:00', workDays: [1, 2, 3, 4, 5],
-    theme: 'system', motion: true, haptics: true, area: 'privat', autoArea: true };
-  const blank = () => ({ version: 2, sample: false, places: [], entries: [], cases: [], routes: {}, shop: {}, history: {}, log: [], settings: { ...DEFAULT_SETTINGS } });
+    theme: 'system', motion: true, haptics: true, area: 'privat', autoArea: true,
+    workBriefing: true, handoverOn: true, weeklyHours: 40 };
+  const blank = () => ({ version: 2, sample: false, places: [], entries: [], cases: [], routes: {}, shop: {}, history: {}, log: [], settings: { ...DEFAULT_SETTINGS },
+    templates: [], contacts: [], work: {}, media: {}, timer: null, handover: null });
+  // Vorlage für den Start: ein typischer Reklamationsfall
+  const starterTemplates = () => [{ id: uid(), name: 'RMA anlegen', entry: { type: 'task', title: 'RMA anlegen', context: 'arbeit', notes: '',
+    items: ['Seriennummer notieren', 'Fehlerbild beschreiben', 'Fotos vom Gerät', 'RMA im System anlegen', 'Versandlabel erstellen', 'Kunde informiert'].map(text => ({ text, done: false })) } }];
   const newEntry = o => ({ id: uid(), type: 'task', title: '', notes: '', context: 'privat', date: null, time: null, received: null, source: '',
     leadDays: 3, placeId: null, group: null, items: [], repeat: 'none', caseId: null, photos: [], proof: null, contract: null,
-    ocrText: '', done: false, doneAt: null, createdAt: Date.now(), ...o });
+    ocrText: '', ref: '', contactId: null, flex: false, timeLog: [], done: false, doneAt: null, createdAt: Date.now(), ...o });
 
   function migrate(s) {
     const b = blank();
     s = { ...b, ...s, settings: { ...b.settings, ...(s.settings || {}) } };
     s.entries = (s.entries || []).map(e => newEntry({ ...e }));
     s.places = (s.places || []).map(p => ({ kind: 'store', group: null, radius: 150, lat: null, lng: null, area: 'beide', ...p }));
-    s.cases = (s.cases || []).map(c => ({ context: 'privat', ...c }));
+    s.cases = (s.cases || []).map(c => ({ context: 'privat', status: 'offen', next: '', ...c }));
+    if (!Array.isArray(s.templates)) s.templates = starterTemplates();
+    s.contacts = (s.contacts || []).map(c => ({ company: '', phone: '', email: '', notes: '', context: 'privat', lastAt: null, ...c }));
+    s.work = s.work || {}; s.media = s.media || {};
     if (!['privat', 'arbeit', 'alle'].includes(s.settings.area)) s.settings.area = 'privat';
     s.version = 2;
     return s;
@@ -76,10 +84,17 @@
       { id: 'buero', name: 'Büro', kind: 'other', group: null, lat: null, lng: null, radius: 200 },
       { id: 'mama', name: 'Mama', kind: 'person', group: null, lat: null, lng: null, radius: 0 },
     ];
-    s.cases = [{ id: 'c1', title: 'Rundfunkbeitrag 2026', createdAt: Date.now() - 5 * 864e5, closed: false }];
+    s.cases = [{ id: 'c1', title: 'Rundfunkbeitrag 2026', createdAt: Date.now() - 5 * 864e5, closed: false, context: 'privat', status: 'offen', next: 'Widerspruch abschicken' },
+      { id: 'c2', title: 'Reklamation Dockingstation', createdAt: Date.now() - 2 * 864e5, closed: false, context: 'arbeit', status: 'kunde', next: 'Gerät vom Kunden abwarten' }];
+    s.contacts = [{ id: 'k1', name: 'Frau Jessen', company: 'Muster GmbH', phone: '', email: '', notes: 'Ansprechpartnerin Einkauf', context: 'arbeit', lastAt: Date.now() - 2 * 864e5 }];
+    s.templates = starterTemplates();
     s.entries = [
       newEntry({ type: 'reminder', title: 'Mama zurückrufen', date: t, time: '09:30' }),
       newEntry({ type: 'task', title: 'Wochenbericht abschicken', context: 'arbeit', date: t, time: '12:00', notes: 'An Team-Verteiler, Zahlen aus dem Dashboard.' }),
+      newEntry({ type: 'task', title: 'RMA Dock anlegen', context: 'arbeit', date: t, ref: 'RMA-2210', contactId: 'k1', caseId: 'c2',
+        items: [{ text: 'Seriennummer notieren', done: true }, { text: 'Fehlerbild beschreiben', done: true }, { text: 'RMA im System anlegen', done: false }, { text: 'Kunde informiert', done: false }] }),
+      newEntry({ type: 'waiting', title: 'Rückmeldung Austauschgerät', context: 'arbeit', contactId: 'k1', source: 'Muster GmbH', received: addDays(t, -3), date: addDays(t, 2), caseId: 'c2' }),
+      newEntry({ type: 'task', title: 'Präsentation Quartalszahlen', context: 'arbeit', flex: true, date: L.endOfWeek(t) > t ? L.endOfWeek(t) : addDays(t, 2) }),
       newEntry({ type: 'deadline', title: 'Widerspruch Rundfunkbeitrag', source: 'Brief', received: t, date: addDays(t, 4), leadDays: 7, caseId: 'c1', notes: 'Beitragsnummer: 123 456 789\nKopie vom Bescheid beilegen.' }),
       newEntry({ type: 'task', title: 'Festsetzungsbescheid abgeheftet', caseId: 'c1', date: addDays(t, -5), done: true, doneAt: Date.now() - 5 * 864e5 }),
       newEntry({ type: 'deadline', title: 'Steuererklärung Belege nachreichen', source: 'Finanzamt', received: addDays(t, -10), date: addDays(t, 12), leadDays: 14 }),
@@ -115,11 +130,77 @@
     if (native) { Prefs.set({ key: KEY, value: json }).catch(() => {}); scheduleNotifications(); syncGeofences(); }
   };
 
+  /* ---------- Zeit: Stoppuhr an Einträgen und Arbeitstag ---------- */
+  function toggleTimer(entry) {
+    const t = state.timer;
+    if (t) {
+      const running = state.entries.find(x => x.id === t.entryId);
+      if (running) (running.timeLog = running.timeLog || []).push({ start: t.start, end: Date.now() });
+      state.timer = null;
+      if (running) toast(`${running.title}: ${fmtDur(Date.now() - t.start)} erfasst`);
+      if (!entry || (running && running.id === entry.id)) { save(); return; }
+    }
+    state.timer = { entryId: entry.id, start: Date.now() };
+    // wer an etwas Arbeit misst, ist auch bei der Arbeit: Arbeitstag mitstarten
+    if (ctxOf(entry) === 'arbeit' && !openWorkSession()) startWork('hand');
+    haptic('medium'); save();
+  }
+  const workDay = day => (state.work[day] = state.work[day] || []);
+  const openWorkSession = () => { for (const d of Object.keys(state.work).sort().reverse().slice(0, 3)) { const s = state.work[d].find(x => !x.end); if (s) return s; } return null; };
+  const workMs = day => (state.work[day] || []).reduce((a, x) => a + ((x.end || (day === today() ? Date.now() : x.start)) - x.start), 0);
+  function startWork(src = 'hand', at = Date.now()) {
+    if (openWorkSession()) return;
+    const day = iso(new Date(at)), list = workDay(day), last = list[list.length - 1];
+    // kurz raus und wieder rein (GPS-Zittern, Mittagspause unter 10 Minuten): Abschnitt fortsetzen
+    if (last && last.end && at - last.end < 10 * 60e3) { last.end = null; return; }
+    list.push({ start: at, end: null, src });
+  }
+  function stopWork(at = Date.now()) { const s = openWorkSession(); if (s) s.end = Math.max(at, s.start); }
+  async function pullWorkEvents() {
+    if (!Native) return false;
+    let events = [];
+    try { events = (await Native.takeWorkEvents()).events || []; } catch { return false; }
+    events.sort((a, b) => a.at - b.at).forEach(ev => { if (ev.type === 'enter') startWork('ort', ev.at); else stopWork(ev.at); });
+    return events.length > 0;
+  }
+  const weekWorkMs = (day = today()) => { const mo = L.mondayOf(day); let ms = 0; for (let i = 0; i < 7; i++) ms += workMs(addDays(mo, i)); return ms; };
+  // Sekunden-Anzeige laufender Uhren, ohne alles neu zu zeichnen
+  setInterval(() => {
+    document.querySelectorAll('[data-elapsed]').forEach(el => {
+      const ms = (+el.dataset.base || 0) + Date.now() - +el.dataset.elapsed, sec = Math.floor(ms / 1000);
+      el.textContent = `${Math.floor(sec / 3600)}:${pad(Math.floor(sec / 60) % 60)}:${pad(sec % 60)}`;
+    });
+  }, 1000);
+
+  /* ---------- Medien-Infos: wann und wo aufgenommen ---------- */
+  function noteMedia(path, at) {
+    state.media[path] = { at };
+    const p = here && state.places.find(p => p.lat != null && dist(here, p) <= Math.max(p.radius, 150));
+    if (p) state.media[path].place = p.name;
+    else if (navigator.geolocation && native) navigator.geolocation.getCurrentPosition(pos => {
+      const pt = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      const near = state.places.find(p => p.lat != null && dist(pt, p) <= Math.max(p.radius, 150));
+      if (state.media[path]) { state.media[path].place = near ? near.name : null; state.media[path].lat = pt.lat; state.media[path].lng = pt.lng; save(); }
+    }, () => {}, { maximumAge: 300000, timeout: 5000 });
+  }
+  const mediaCaption = path => {
+    const m = state.media[path]; if (!m) return '';
+    const d = new Date(m.at);
+    return `${d.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })} · ${hhmm(m.at)} Uhr${m.place ? ' · ' + m.place : ''}`;
+  };
+
   /* ---------- Hilfen für Einträge ---------- */
   const placeById = id => state.places.find(p => p.id === id);
   const listTarget = e => e.group ? `Jeder ${GROUPS[e.group]}` : (placeById(e.placeId)?.name || 'Ort');
   const listsFor = p => state.entries.filter(e => e.type === 'place' && !e.done && (e.placeId === p.id || (e.group && e.group === p.group)));
   const caseById = id => state.cases.find(c => c.id === id);
+  const contactById = id => state.contacts.find(c => c.id === id);
+  const CASE_STATUS = { offen: 'In Arbeit', kunde: 'Wartet auf Kunde', kollege: 'Wartet auf Kollegen', pausiert: 'Pausiert' };
+  // Dauer in Minuten als „2 h 05 min“
+  const fmtDur = ms => { const m = Math.max(0, Math.round(ms / 60000)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ' ' + pad(m % 60) + ' min' : ''}`; };
+  const fmtHours = ms => (ms / 36e5).toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' h';
+  const loggedMs = e => (e.timeLog || []).reduce((a, x) => a + ((x.end || Date.now()) - x.start), 0)
+    + (state.timer && state.timer.entryId === e.id ? Date.now() - state.timer.start : 0);
 
   /* ---------- Bereiche: Privat und Arbeit getrennt ---------- */
   const AREAS = { privat: 'Privat', arbeit: 'Arbeit', alle: 'Beides' };
@@ -150,8 +231,8 @@
     state.settings.area = a; applyArea(); haptic('select'); save(); render({ enter: true });
   }
 
-  function dayModel(day, { all = false } = {}) {
-    const mine = all ? state.entries : state.entries.filter(inArea);
+  function dayModel(day, { all = false, ctx = null } = {}) {
+    const mine = ctx ? state.entries.filter(e => ctxOf(e) === ctx) : all ? state.entries : state.entries.filter(inArea);
     const open = mine.filter(e => e.type !== 'place');
     const t = day;
     const overdue = open.filter(e => !e.done && e.date && e.date < t && !['contract', 'document', 'waiting'].includes(e.type));
@@ -161,7 +242,9 @@
       .sort((a, b) => a.date.localeCompare(b.date));
     const followUp = open.filter(e => e.type === 'waiting' && !e.done && e.date && e.date <= t);
     const lists = mine.filter(e => e.type === 'place' && !e.done && e.items.some(i => !i.done));
-    return { overdue, todays, upcoming, followUp, lists };
+    // flexible Aufgaben: stehen bis zu ihrem Tag unter „Diese Woche“, am Tag selbst unter Heute
+    const week = open.filter(e => e.flex && !e.done && e.date && e.date > t && daysBetween(t, e.date) <= 6).sort((a, b) => a.date.localeCompare(b.date));
+    return { overdue, todays, upcoming, followUp, lists, week };
   }
 
   function logDone(e, title) {
@@ -241,8 +324,8 @@
     const regions = state.places.filter(p => p.lat != null && p.kind !== 'person').map(p => {
       const lists = listsFor(p), open = lists.flatMap(l => l.items.filter(i => !i.done).map(i => i.text));
       return { id: p.id, placeId: p.id, lat: p.lat, lng: p.lng, radius: p.radius || 150, title: `Du bist bei ${p.name}`,
-        body: open.length ? `${open.length} offen: ${open.slice(0, 6).join(', ')}${open.length > 6 ? ' …' : ''}` : '' };
-    }).filter(r => r.body);
+        body: open.length ? `${open.length} offen: ${open.slice(0, 6).join(', ')}${open.length > 6 ? ' …' : ''}` : '', track: p.trackTime ? 1 : 0 };
+    }).filter(r => r.body || r.track);
     const json = JSON.stringify(regions);
     if (json === lastRegions) return;
     lastRegions = json;
@@ -259,13 +342,14 @@
   const numId = s => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h) % 2147483000 + 1; };
   const at = (date, time) => { const [h, m] = (time || '09:00').split(':').map(Number); const d = parse(date); d.setHours(h, m, 0, 0); return d; };
   let notifyAllowed = null, scheduleTimer;
-  function briefingText(day) {
-    const m = dayModel(day, { all: true });
+  function briefingText(day, ctx = null) {
+    const m = ctx ? dayModel(day, { ctx }) : dayModel(day, { all: true });
     const items = m.todays.filter(e => !e.done);
     const parts = [];
     if (items.length) parts.push(`${items.length} für heute`);
     if (m.upcoming.length) parts.push(`${m.upcoming.length} ${m.upcoming.length === 1 ? 'Frist' : 'Fristen'} in Sicht`);
     if (m.overdue.length && day === today()) parts.push(`${m.overdue.length} liegengeblieben`);
+    if (m.week?.length) parts.push(`${m.week.length} flexibel diese Woche`);
     const first = items.find(e => e.time);
     return (parts.join(' · ') || 'Nichts geplant') + (first ? `. Zuerst: ${first.time} ${first.title}` : '');
   }
@@ -279,21 +363,34 @@
         const pending = (await Notes.getPending()).notifications;
         if (pending.length) await Notes.cancel({ notifications: pending.map(n => ({ id: n.id })) });
         const now = Date.now(), list = [], s = state.settings;
+        const isWork = day => s.workDays.includes(parse(day).getDay()) && !L.holidayName(day, s.state);
+        // Arbeits-Mitteilungen mit Standardzeit landen am nächsten Arbeitstag zu Arbeitsbeginn
+        const workSlot = day => { let d = day; for (let i = 0; i < 10 && !isWork(d); i++) d = addDays(d, 1); return at(d, s.workStart); };
         for (let i = 0; i < 7; i++) {
           const day = addDays(today(), i);
-          if (s.morningOn && briefingText(day) !== 'Nichts geplant') list.push({ id: numId('morning' + day), title: 'Dein Tag', body: briefingText(day), at: at(day, s.morningTime), extra: { open: 'heute' }, prio: 1 });
+          // zwei Briefings: privat am Morgen, Arbeit zu Arbeitsbeginn
+          const privText = s.workBriefing ? briefingText(day, 'privat') : briefingText(day);
+          if (s.morningOn && privText !== 'Nichts geplant') list.push({ id: numId('morning' + day), title: 'Dein Tag', body: privText, at: at(day, s.morningTime), extra: { open: 'heute', area: s.workBriefing ? 'privat' : undefined }, prio: 1 });
+          if (s.workBriefing && isWork(day)) {
+            const wt = briefingText(day, 'arbeit'), ho = state.handover && state.handover.date < day && state.handover.date >= addDays(day, -4) ? state.handover.text.split('\n')[0].replace(/^[-\d.\s]+/, '') : '';
+            if (wt !== 'Nichts geplant' || ho) list.push({ id: numId('work' + day), title: 'Arbeit', body: (wt !== 'Nichts geplant' ? wt : 'Nichts Festes geplant') + (ho ? `. Zuerst: ${ho}` : ''), at: at(day, s.workStart), extra: { open: 'heute', area: 'arbeit' }, prio: 1 });
+          }
+          if (s.handoverOn && isWork(day)) list.push({ id: numId('handover' + day), title: 'Feierabend', body: 'Kurz notieren, was du morgen zuerst machst. Dann ist der Kopf frei.', at: at(day, s.workEnd), extra: { open: 'handover', area: 'arbeit' }, prio: 1 });
           if (s.eveningOn) list.push({ id: numId('evening' + day), title: 'Tagesabschluss', body: 'Schau, was du heute geschafft hast, und schieb Offenes auf morgen.', at: at(day, s.eveningTime), extra: { open: 'review' }, prio: 1 });
         }
         for (const e of state.entries) {
           if (e.done || !e.date || e.type === 'place') continue;
+          const work = ctxOf(e) === 'arbeit', ex = { open: 'heute', area: work ? 'arbeit' : 'privat' };
           if (DATED_ALERT.includes(e.type)) {
             const lead = e.leadDays || 0, label = { deadline: 'Frist', contract: 'Kündigen bis', document: 'Läuft ab' }[e.type];
-            if (lead > 0) list.push({ id: numId(e.id + ':lead'), title: `${label} in ${lead} ${lead === 1 ? 'Tag' : 'Tagen'}`, body: e.title, at: at(addDays(e.date, -lead), '09:00') });
-            list.push({ id: numId(e.id + ':due'), title: `${label} heute`, body: e.title, at: at(e.date, '08:00') });
+            // echte Fristen kommen immer, bei der Arbeit aber zu Arbeitsbeginn statt um 8 Uhr
+            if (lead > 0) list.push({ id: numId(e.id + ':lead'), title: `${label} in ${lead} ${lead === 1 ? 'Tag' : 'Tagen'}`, body: e.title, at: work ? workSlot(addDays(e.date, -lead)) : at(addDays(e.date, -lead), '09:00'), extra: ex });
+            list.push({ id: numId(e.id + ':due'), title: `${label} heute`, body: e.title, at: at(e.date, work ? s.workStart : '08:00'), extra: ex });
           } else if (e.type === 'waiting') {
-            list.push({ id: numId(e.id), title: 'Nachhaken', body: `${e.title}${e.source ? ' · ' + e.source : ''}`, at: at(e.date, '10:00') });
+            const who = contactById(e.contactId)?.name || e.source;
+            list.push({ id: numId(e.id), title: 'Nachhaken', body: `${e.title}${who ? ' · ' + who : ''}`, at: work ? workSlot(e.date) : at(e.date, '10:00'), extra: ex });
           } else if (e.time) {
-            list.push({ id: numId(e.id), title: e.title, body: e.notes || TYPE[e.type].label, at: at(e.date, e.time) });
+            list.push({ id: numId(e.id), title: e.title, body: e.notes || TYPE[e.type].label, at: at(e.date, e.time), extra: ex });
           }
         }
         const next = list.filter(n => n.at.getTime() > now).sort((a, b) => (b.prio || 0) - (a.prio || 0) || a.at - b.at).slice(0, 62)
@@ -395,9 +492,12 @@
       input.click();
     });
   }
-  async function storeMedia(file) {
-    if (/^video\//.test(file.type) || /\.(mov|mp4|m4v)$/i.test(file.name || '')) return saveVideo(file);
-    return savePhoto(await fileToJpegBase64(file));
+  async function storeMedia(file, fromCamera) {
+    const vid = /^video\//.test(file.type) || /\.(mov|mp4|m4v)$/i.test(file.name || '');
+    const path = vid ? await saveVideo(file) : await savePhoto(await fileToJpegBase64(file));
+    // aus der Mediathek: Aufnahmezeit der Datei, sonst jetzt
+    noteMedia(path, !fromCamera && file.lastModified && file.lastModified < Date.now() - 60e3 ? file.lastModified : Date.now());
+    return path;
   }
   async function deleteMedia(paths) {
     const used = new Set(state.entries.flatMap(e => e.photos || []));
@@ -442,7 +542,9 @@
   function entryText(e) {
     const t = today(), out = [];
     out.push(`${TYPE[e.type].label}: ${e.title || '(ohne Titel)'}`);
-    const c = caseById(e.caseId); if (c) out.push(`Vorgang: ${c.title}`);
+    const c = caseById(e.caseId); if (c) out.push(`${ctxOf(c) === 'arbeit' ? 'Projekt' : 'Vorgang'}: ${c.title}`);
+    if (e.ref) out.push(`Nummer: ${e.ref}`);
+    const who = contactById(e.contactId); if (who) out.push(`Person: ${who.name}${who.company ? ' (' + who.company + ')' : ''}`);
     if (e.type === 'deadline' && e.date) {
       const left = daysBetween(t, e.date);
       out.push(`Frist bis: ${longDate(e.date)} (${left < 0 ? `${-left} Tage überfällig` : left === 0 ? 'heute' : left === 1 ? 'morgen' : `noch ${left} Tage`})`);
@@ -467,12 +569,21 @@
       out.push(`Ort: ${listTarget(e)}`);
       if (e.items.length) { out.push('Liste:'); L.sortItems(e.items, routeFor(e)).forEach(({ it }) => out.push(`${it.done ? '[x]' : '[ ]'} ${it.text}`)); }
     }
+    if (e.type !== 'place' && e.items?.length) { out.push('Checkliste:'); e.items.forEach(i => out.push(`${i.done ? '[x]' : '[ ]'} ${i.text}`)); }
+    if (e.timeLog?.length) out.push(`Zeitaufwand: ${fmtDur(loggedMs(e))}`);
+    if (e.flex) out.push('Flexibel: irgendwann bis zu diesem Tag');
     out.push(`Bereich: ${e.context === 'arbeit' ? 'Arbeit' : 'Privat'}`);
     out.push(`Status: ${e.done ? `erledigt${e.doneAt ? ' am ' + new Date(e.doneAt).toLocaleDateString('de-DE') : ''}` : 'offen'}`);
     if (e.proof) out.push(`Nachweis: ${e.proof.method}${e.proof.note ? ' – ' + e.proof.note : ''}`);
     if (e.notes) { out.push('Details:'); out.push(e.notes); }
     if (e.ocrText) { out.push('Text aus dem Brief:'); out.push(e.ocrText); }
     return out.join('\n');
+  }
+  function nudgeText(e) {
+    const who = contactById(e.contactId);
+    const greet = who ? (/^(frau|herr)\s/i.test(who.name) ? `Hallo ${who.name}` : `Hallo ${who.name.split(' ')[0]}`) : 'Hallo';
+    const since = e.received ? ` vom ${shortDate(e.received)}` : '';
+    return `${greet},\n\nkurze Nachfrage zu „${e.title}“${e.ref ? ` (${e.ref})` : ''}${since}: Gibt es dazu schon einen Stand?\n\nViele Grüße`;
   }
   function dayText() {
     const m = dayModel(today());
@@ -516,8 +627,14 @@
     } else if (overdue) {
       tags.push(`<span class="tag due">seit ${fmtDate(e.date)}</span>`);
     }
+    if (e.ref) tags.push(`<span class="tag plain mono">${esc(e.ref)}</span>`);
+    const who = contactById(e.contactId); if (who) tags.push(`<button type="button" class="tag person" data-contact="${who.id}">${esc(who.name)}</button>`);
     const c = caseById(e.caseId); if (c) tags.push(`<span class="tag plain">${esc(c.title)}</span>`);
-    if (e.photos?.length) tags.push(`<span class="tag plain">${e.photos.length} Foto${e.photos.length > 1 ? 's' : ''}</span>`);
+    if (e.type !== 'place' && e.items?.length) { const d = e.items.filter(i => i.done).length; tags.push(`<span class="tag ${d === e.items.length ? '' : 'plain'}">☑ ${d}/${e.items.length}</span>`); }
+    if (e.flex && !e.done && e.date > t) tags.push(`<span class="tag plain">bis ${fmtDate(e.date)}</span>`);
+    if (state.timer?.entryId === e.id) tags.push(`<span class="tag work" data-elapsed="${state.timer.start}" data-base="${loggedMs(e) - (Date.now() - state.timer.start)}">läuft</span>`);
+    else if (e.timeLog?.length) tags.push(`<span class="tag plain">${fmtDur(loggedMs(e))}</span>`);
+    if (e.photos?.length) { const v = e.photos.filter(isVideo).length, f = e.photos.length - v; tags.push(`<span class="tag plain">${[f && `${f} Foto${f > 1 ? 's' : ''}`, v && `${v} Video${v > 1 ? 's' : ''}`].filter(Boolean).join(', ')}</span>`); }
     if (e.context === 'arbeit' && area() === 'alle') tags.push('<span class="tag work">Arbeit</span>');
     if (e.repeat && e.repeat !== 'none') tags.push(`<span class="tag plain">${{ daily: 'täglich', weekly: 'wöchentlich', monthly: 'monatlich' }[e.repeat]}</span>`);
     return `<div class="item ${e.done ? 'done' : ''} ${overdue ? 'overdue' : ''}">
@@ -572,6 +689,11 @@
 
     let html = header(d.toLocaleDateString('de-DE', { weekday: 'long' }), d.toLocaleDateString('de-DE', { day: 'numeric', month: 'long' }));
     if (state.sample) html += '<p class="note">Beispieldaten. Unter „Alles“ kannst du sie mit „Beispiele löschen“ entfernen.</p>';
+    html += `<div class="segmented compact">${[['tag', 'Tag'], ['woche', 'Woche']].map(([k, l]) => `<button class="chip" data-dayview="${k}" aria-pressed="${dayView === k}">${l}</button>`).join('')}</div>`;
+    html += timerBanner();
+    if (area() !== 'privat') html += workCard();
+    if (area() !== 'privat' && state.handover && state.handover.date < t && state.handover.text) html += `<div class="card accent"><div class="card-row"><h3>Von gestern: zuerst</h3><button class="link" id="handoverDone">Erledigt</button></div><div class="desc" style="white-space:pre-wrap">${esc(state.handover.text)}</div></div>`;
+    if (dayView === 'woche') return html + weekView(t);
     html += `<div class="summary">${pills.join('')}<button class="pill" id="copyDay" type="button">Tag kopieren</button></div>`;
     const dayItems = visible(m.todays), dayDone = dayItems.filter(e => e.done).length;
     if (dayItems.length) html += `<div class="day-progress">${progressBar('day', dayDone, dayItems.length)}<span><b>${dayDone}</b> von ${dayItems.length} geschafft</span></div>`;
@@ -579,10 +701,11 @@
       const doneToday = state.log.filter(l => iso(new Date(l.at)) === t && logInArea(l)).length;
       html += `<div class="banner"><span>Tagesabschluss: ${doneToday} erledigt, ${openToday + m.overdue.length} offen</span><button class="btn small" data-review>Rückblick</button></div>`;
     }
-    if (area() === 'arbeit' && !inWorkHours()) html += `<div class="banner"><span>Feierabend. Die Arbeit kann warten.</span><button class="btn small" data-area="privat">Zu Privat</button></div>`;
+    if (area() === 'arbeit' && !inWorkHours()) html += `<div class="banner"><span>Feierabend. Die Arbeit kann warten.</span><span class="row-actions" style="margin:0">${state.settings.handoverOn ? '<button class="btn small" data-handover>Übergabe</button>' : ''}<button class="btn small" data-area="privat">Zu Privat</button></span></div>`;
 
     if (visible(m.overdue).length) html += group('Liegengeblieben', visible(m.overdue).map(e => itemRow(e, { showDate: true })).join(''), `<button class="link" data-review>auf morgen</button>`);
     html += group('Heute', visible(m.todays).length ? visible(m.todays).map(e => itemRow(e)).join('') : '<div class="empty">Nichts geplant. Mit + legst du etwas an.</div>');
+    if (m.week.length) html += group('Diese Woche, flexibel', m.week.map(e => itemRow(e)).join(''));
     if (visible(m.upcoming).length) html += group('Fristen in Sicht', visible(m.upcoming).map(e => itemRow(e)).join(''));
     if (m.followUp.length) html += group('Nachhaken', m.followUp.map(e => itemRow(e)).join(''));
     if (m.lists.length) html += group('Wenn du unterwegs bist', m.lists.map(e => {
@@ -592,6 +715,36 @@
       return `<div class="item"><div class="time">${p?.kind === 'person' ? 'Person' : 'Ort'}</div><div class="body" data-goto="orte"><div class="title">${esc(label)} · ${esc(e.title)}</div>
         <div class="desc">${left.length} von ${e.items.length} offen: ${esc(left.slice(0, 3).map(i => i.text).join(', '))}${left.length > 3 ? ' …' : ''}</div></div><span></span></div>`;
     }).join(''));
+    return html;
+  }
+
+  let dayView = 'tag';
+  function timerBanner() {
+    const tm = state.timer; if (!tm) return '';
+    const e = state.entries.find(x => x.id === tm.entryId); if (!e) { state.timer = null; return ''; }
+    return `<div class="banner timer"><span><b data-elapsed="${tm.start}" data-base="${loggedMs(e) - (Date.now() - tm.start)}">${fmtDur(loggedMs(e))}</b> · ${esc(e.title)}</span><button class="btn small" id="stopTimer">Stopp</button></div>`;
+  }
+  function workCard() {
+    const t = today(), open = openWorkSession(), ms = workMs(t), wk = weekWorkMs(t), goal = (state.settings.weeklyHours || 40) * 36e5;
+    if (!open && !ms && area() === 'alle') return '';
+    return `<div class="card work-card"><div class="card-row"><div><div class="sub">Arbeitszeit heute</div><div class="big">${open ? `<span data-elapsed="${open.start}" data-base="${ms - (Date.now() - open.start)}">${fmtDur(ms)}</span>` : fmtDur(ms)}</div></div>
+      <button class="btn ${open ? '' : 'primary'}" id="workToggle">${open ? 'Gehen' : 'Kommen'}</button></div>
+      ${progressBar('week-work', Math.min(wk, goal), goal)}<div class="sub">Diese Woche ${fmtHours(wk)} von ${state.settings.weeklyHours || 40} h${open ? ` · seit ${hhmm(open.start)} Uhr${open.src === 'ort' ? ' (automatisch)' : ''}` : ''}</div></div>`;
+  }
+  function weekView(t) {
+    let html = '';
+    const mine = state.entries.filter(e => inArea(e) && e.type !== 'place' && !e.done && e.date);
+    const over = mine.filter(e => e.date < t && !['contract', 'document', 'waiting'].includes(e.type));
+    if (over.length) html += group('Liegengeblieben', over.map(e => itemRow(e, { showDate: true })).join(''));
+    for (let i = 0; i < 7; i++) {
+      const day = addDays(t, i);
+      const rows = mine.filter(e => e.date === day && !(e.flex && i > 0)).sort((a, b) => (a.time || '99').localeCompare(b.time || '99'));
+      const label = i === 0 ? 'Heute' : i === 1 ? 'Morgen' : parse(day).toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'short' });
+      const free = !L.isWorkday(day, state.settings.state);
+      html += group(label, rows.length ? rows.map(e => itemRow(e)).join('') : `<div class="empty small">${free && area() === 'arbeit' ? 'Frei' : 'Nichts geplant'}</div>`, workMs(day) ? fmtDur(workMs(day)) : '');
+    }
+    const flex = mine.filter(e => e.flex && e.date > t && daysBetween(t, e.date) <= 6);
+    if (flex.length) html += group('Flexibel diese Woche', flex.map(e => itemRow(e)).join(''));
     return html;
   }
 
@@ -645,21 +798,35 @@
   let papersTab = 'vorgaenge';
   function viewPapiere() {
     let html = header('Papierkram', 'Papiere', '<button class="btn small primary" id="scan">Brief scannen</button>');
-    const segs = [['vorgaenge', 'Vorgänge'], ['vertraege', 'Verträge'], ['dokumente', 'Dokumente'], ['warten', 'Wartet auf']];
+    const segs = [['vorgaenge', area() === 'arbeit' ? 'Projekte' : 'Vorgänge'], ['personen', 'Personen'], ['warten', 'Wartet auf'], ['vertraege', 'Verträge'], ['dokumente', 'Dokumente']];
     html += `<div class="segmented">${segs.map(([k, l]) => `<button class="chip" data-paper="${k}" aria-pressed="${papersTab === k}">${l}</button>`).join('')}</div>`;
     const sortByDate = (a, b) => (a.date || '9999').localeCompare(b.date || '9999');
     if (papersTab === 'vorgaenge') {
-      const cases = state.cases.filter(c => !c.closed && inArea(c));
-      html += '<div class="row-actions" style="margin:0 0 16px"><button class="btn small" id="newCase">Neuer Vorgang</button></div>';
-      if (!cases.length) html += '<div class="empty">Ein Vorgang bündelt alles zu einer Sache: Brief, Antwort, Fristen, Fotos. Lege einen an oder ordne einen Eintrag einem Vorgang zu.</div>';
+      const order = Object.keys(CASE_STATUS);
+      const cases = state.cases.filter(c => !c.closed && inArea(c)).sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || b.createdAt - a.createdAt);
+      const word = area() === 'arbeit' ? 'Projekt' : 'Vorgang';
+      html += `<div class="row-actions" style="margin:0 0 16px"><button class="btn small" id="newCase">${area() === 'arbeit' ? 'Neues Projekt' : 'Neuer Vorgang'}</button></div>`;
+      if (!cases.length) html += `<div class="empty">Ein ${word} bündelt alles zu einer Sache: Briefe, Aufgaben, Fristen, Fotos, Personen. Lege einen an oder ordne einen Eintrag zu.</div>`;
       cases.forEach(c => {
         const es = state.entries.filter(e => e.caseId === c.id);
         const next = es.filter(e => !e.done && e.date).sort(sortByDate)[0];
-        html += `<div class="card" data-case="${c.id}" style="cursor:pointer"><div class="card-row"><h3>${esc(c.title)}</h3><span class="sub">${es.length} Einträge</span></div>
-          <div class="sub">${next ? `Nächstes: ${esc(next.title)} · ${fmtDate(next.date)}` : 'Nichts offen'}</div></div>`;
+        const ms = es.reduce((a, e) => a + loggedMs(e), 0);
+        const st = c.status || 'offen';
+        html += `<div class="card" data-case="${c.id}" style="cursor:pointer"><div class="card-row"><h3>${esc(c.title)}</h3><span class="tag ${st === 'offen' ? '' : st === 'pausiert' ? 'plain' : 'due'}">${CASE_STATUS[st]}</span></div>
+          ${c.next ? `<div><span class="sub">Nächster Schritt:</span> ${esc(c.next)}</div>` : ''}
+          <div class="sub">${[next ? `Nächstes: ${esc(next.title)} · ${fmtDate(next.date)}` : (es.some(e => !e.done) ? `${es.filter(e => !e.done).length} offen` : 'Nichts offen'), `${es.length} Einträge`, ms ? fmtDur(ms) : ''].filter(Boolean).join(' · ')}</div></div>`;
       });
       const closed = state.cases.filter(c => c.closed && inArea(c));
-      if (closed.length) html += `<p class="note">${closed.length} abgeschlossene Vorgänge im Verlauf.</p>`;
+      if (closed.length) html += `<p class="note">${closed.length} abgeschlossen. Du findest sie über die Suche unter „Alles“.</p>`;
+    } else if (papersTab === 'personen') {
+      const ks = state.contacts.filter(inArea).sort((a, b) => a.name.localeCompare(b.name, 'de'));
+      html += '<div class="row-actions" style="margin:0 0 16px"><button class="btn small" id="newContact">Person anlegen</button></div>';
+      if (!ks.length) html += '<div class="empty">Kunden, Kollegen, Ansprechpartner: mit allem, was bei ihnen offen ist. Im Eintrag wählst du die Person aus, in der Schnelleingabe reicht @Name.</div>';
+      ks.forEach(k => {
+        const open = state.entries.filter(e => e.contactId === k.id && !e.done), last = lastContact(k);
+        html += `<div class="card" data-contact="${k.id}" style="cursor:pointer"><div class="card-row"><h3>${esc(k.name)}</h3><span class="sub">${open.length ? `${open.length} offen` : 'nichts offen'}</span></div>
+          <div class="sub">${[k.company && esc(k.company), last ? `zuletzt ${relDay(last)}` : 'noch kein Kontakt notiert'].filter(Boolean).join(' · ')}</div></div>`;
+      });
     } else {
       const type = { vertraege: 'contract', dokumente: 'document', warten: 'waiting' }[papersTab];
       const list = state.entries.filter(e => e.type === type && !e.done && inArea(e)).sort(sortByDate);
@@ -682,7 +849,16 @@
     let html = header('What did I do', 'Verlauf');
     html += `<div class="card"><div class="card-row"><h3>Diese Woche</h3><button class="btn small" data-review>Tagesrückblick</button></div>
       <div class="stat-row"><div class="stat"><b>${weekDone}</b><span>erledigt</span></div><div class="stat"><b>${nextWeek.length}</b><span>Fristen in 7 Tagen</span></div><div class="stat"><b>${waiting.length}</b><span>wartet auf</span></div></div>
-      ${nextWeek.length ? `<div class="sub">${nextWeek.slice(0, 4).map(e => `${esc(e.title)} · ${fmtDate(e.date)}`).join('<br>')}</div>` : ''}</div>`;
+      ${nextWeek.length ? `<div class="sub">${nextWeek.slice(0, 4).map(e => `${esc(e.title)} · ${fmtDate(e.date)}`).join('<br>')}</div>` : ''}
+      <div class="row-actions" style="margin:0"><button class="btn small" id="copyWeek">Wochenbericht kopieren</button>${area() !== 'privat' ? '<button class="btn small" id="copyStandup">Standup kopieren</button>' : ''}</div></div>`;
+    if (area() !== 'privat') {
+      const goal = (state.settings.weeklyHours || 40) * 36e5, wk = weekWorkMs(t);
+      const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+      html += `<div class="card"><div class="card-row"><h3>Arbeitszeit</h3><span class="sub">${fmtHours(wk)} von ${state.settings.weeklyHours || 40} h</span></div>${progressBar('week-work-v', Math.min(wk, goal), goal)}
+        <ul class="timeline">${days.map(dd => { const list = state.work[dd] || []; const ms = workMs(dd);
+          return `<li data-workday-edit="${dd}" style="cursor:pointer"><span class="when">${['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][parse(dd).getDay()]} ${dd.slice(8)}.${dd.slice(5, 7)}.</span><div class="body"><div class="title">${ms ? fmtDur(ms) : '—'}</div>${list.length ? `<div class="desc">${list.map(x => `${hhmm(x.start)}–${x.end ? hhmm(x.end) : 'jetzt'}${x.src === 'ort' ? ' (Ort)' : ''}`).join(', ')}</div>` : ''}</div></li>`; }).join('')}</ul>
+        <div class="sub">${wk > goal ? `${fmtHours(wk - goal)} über Soll` : `noch ${fmtHours(goal - wk)} bis zum Soll`}. Tippe auf einen Tag zum Korrigieren.</div></div>`;
+    }
     html += `<input class="search" id="logq" type="search" placeholder="Wann habe ich … ? z. B. Zählerstand, Widerspruch" value="${esc(logQuery)}">`;
     const q = logQuery.trim().toLowerCase();
     const entries = state.log.filter(l => logInArea(l) && (!q || `${l.title} ${l.place || ''}`.toLowerCase().includes(q)));
@@ -704,7 +880,7 @@
       if (Object.keys(TYPE).includes(filter) && e.type !== filter) return false;
       if (filter === 'erledigt' ? !e.done : e.done) return false;
       if (!q) return true;
-      return [e.title, e.notes, e.source, e.ocrText, caseById(e.caseId)?.title, ...(e.items || []).map(i => i.text)].join(' ').toLowerCase().includes(q);
+      return [e.title, e.notes, e.source, e.ocrText, e.ref, contactById(e.contactId)?.name, contactById(e.contactId)?.company, caseById(e.caseId)?.title, ...(e.items || []).map(i => i.text)].join(' ').toLowerCase().includes(q);
     }).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999') || (a.time || '').localeCompare(b.time || ''));
     const chips = [['alle', 'Alle'], ['deadline', 'Fristen'], ['reminder', 'Erinnerungen'], ['task', 'Aufgaben'], ['place', 'Ortslisten'], ['waiting', 'Wartet auf'], ['contract', 'Verträge'], ['document', 'Dokumente'], ['erledigt', 'Erledigt']]
       .map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${filter === k}">${l}</button>`).join('');
@@ -712,7 +888,7 @@
       ? `<div class="item"><div class="time">Ort</div><div class="body" data-edit="${e.id}"><div class="title">${esc(listTarget(e))} · ${esc(e.title)}</div><div class="desc">${e.items.filter(i => !i.done).length} offen</div></div><span></span></div>`
       : itemRow(e, { showDate: true })).join('');
     return header('Archiv und Suche', 'Alles', gearBtn) +
-      `<input class="search" id="q" type="search" placeholder="Suchen, z. B. Brief, Kaufland, Steuer" value="${esc(query)}">
+      `<input class="search" id="q" type="search" placeholder="Suchen: Brief, Kaufland, RMA-Nummer, Person" value="${esc(query)}">
       <div class="filters">${chips}</div>
       ${rows ? `<div class="list">${rows}</div>` : '<div class="empty">Nichts gefunden.</div>'}
       <div class="row-actions" style="margin-top:28px"><button class="btn ghost" id="reset">${state.sample ? 'Beispiele löschen' : 'Alle Daten löschen'}</button></div>`;
@@ -737,10 +913,10 @@
     clearTimeout(sheetTimer); sheetTimer = setTimeout(() => { sheetRoot.innerHTML = ''; sheetRoot.classList.remove('closing'); }, 240);
   }
 
-  function openSheet(entry, { draft = null, type = null, caseId = null, placeId = null, info = null, quick = false } = {}) {
+  function openSheet(entry, { draft = null, type = null, caseId = null, placeId = null, contactId = null, info = null, quick = false } = {}) {
     const isNew = !entry;
     const t = today();
-    const e = entry ? JSON.parse(JSON.stringify(entry)) : (draft || newEntry({ type: type || 'reminder', date: t, received: t, source: type === 'deadline' ? 'Brief' : '', caseId, placeId: placeId || null, context: caseId ? ctxOf(caseById(caseId)) : defaultCtx() }));
+    const e = entry ? JSON.parse(JSON.stringify(entry)) : (draft || newEntry({ type: type || 'reminder', date: t, received: t, source: type === 'deadline' ? 'Brief' : '', caseId, placeId: placeId || null, contactId, context: caseId ? ctxOf(caseById(caseId)) : contactId ? ctxOf(contactById(contactId)) : defaultCtx() }));
     if (isNew && draft && !draft._ctxSet) e.context = defaultCtx();
     if (isNew && e.type === 'place' && !e.placeId && !e.group) { const p = state.places.find(p => p.kind !== 'person'); if (p) e.placeId = p.id; else e.group = 'supermarkt'; }
     if (isNew && e.type === 'contract' && !e.contract) e.contract = { termEnd: L.addMonths(t, 12), noticeN: 1, noticeUnit: 'Monate', renewMonths: 1 };
@@ -751,6 +927,11 @@
       const placeOpts = Object.entries(GROUPS).map(([g, n]) => `<option value="g:${g}" ${e.group === g ? 'selected' : ''}>Jeder ${n}</option>`).join('') +
         state.places.filter(p => p.id === e.placeId || area() === 'alle' || (p.area || 'beide') === 'beide' || p.area === ctxOf(e)).map(p => `<option value="${p.id}" ${!e.group && p.id === e.placeId ? 'selected' : ''}>${p.kind === 'person' ? 'Person: ' : ''}${esc(p.name)}</option>`).join('') + '<option value="__new">Neuer Ort …</option>';
       const caseOpts = '<option value="">Kein Vorgang</option>' + state.cases.filter(c => c.id === e.caseId || (!c.closed && ctxOf(c) === ctxOf(e))).map(c => `<option value="${c.id}" ${c.id === e.caseId ? 'selected' : ''}>${esc(c.title)}</option>`).join('') + '<option value="__new">Neuer Vorgang …</option>';
+      const ctxContacts = state.contacts.filter(k => k.id === e.contactId || area() === 'alle' || ctxOf(k) === ctxOf(e));
+      const contactOpts = '<option value="">Niemand</option>' + ctxContacts.map(k => `<option value="${k.id}" ${k.id === e.contactId ? 'selected' : ''}>${esc(k.name)}${k.company ? ' · ' + esc(k.company) : ''}</option>`).join('') + `<option value="__new" ${e._contactName ? 'selected' : ''}>Neue Person …</option>`;
+      const subList = e.items.length ? `<ul class="checklist">${e.items.map((it, i) => `<li class="${it.done ? 'got' : ''}"><input type="checkbox" id="sub-${i}" data-sub="${i}" ${it.done ? 'checked' : ''}><span><label for="sub-${i}">${esc(it.text)}</label></span><button type="button" class="icon-btn small" data-subdel="${i}" aria-label="Schritt entfernen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></li>`).join('')}</ul>` : '';
+      const tpls = state.templates.filter(tp => area() === 'alle' || ctxOf(tp.entry) === ctxOf(e));
+      const running = state.timer?.entryId === e.id;
       const placeholder = { reminder: 'z. B. Mama zurückrufen', task: 'z. B. Fahrrad aufpumpen', deadline: 'z. B. Antwort an Versicherung', place: 'z. B. Wocheneinkauf', waiting: 'z. B. Erstattung Krankenkasse', contract: 'z. B. Handyvertrag', document: 'z. B. Personalausweis' }[e.type];
       const leadSelect = (opts, label = 'Vorher erinnern') => `<div class="field"><label for="f-lead">${label}</label><select id="f-lead">${opts.map(n => `<option value="${n}" ${n == e.leadDays ? 'selected' : ''}>${n} ${n === 1 ? 'Tag' : 'Tage'} vorher</option>`).join('')}</select></div>`;
       let typeFields = '';
@@ -764,6 +945,7 @@
       if (e.type === 'reminder' || e.type === 'task') typeFields = `
         <div class="two"><div class="field"><label for="f-date">Tag</label><input id="f-date" type="date" value="${e.date || ''}"></div>
         <div class="field"><label for="f-time">Uhrzeit${e.type === 'task' ? ' (optional)' : ''}</label><input id="f-time" type="time" value="${e.time || ''}"></div></div>
+        <label class="inline hint"><input type="checkbox" id="f-flex" ${e.flex ? 'checked' : ''}> Flexibel: irgendwann bis zu diesem Tag (steht bis dahin unter „Diese Woche“)</label>
         <div class="field"><label for="f-repeat">Wiederholen</label><select id="f-repeat">${[['none', 'Nie'], ['daily', 'Täglich'], ['weekly', 'Wöchentlich'], ['monthly', 'Monatlich']].map(([k, l]) => `<option value="${k}" ${e.repeat === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
       if (e.type === 'waiting') typeFields = `
         <div class="field"><label for="f-source">Bei wem</label><input id="f-source" value="${esc(e.source)}" placeholder="z. B. Stadtwerke, Vermieter"></div>
@@ -797,10 +979,16 @@
       showSheet(`
         <div class="sheet-head"><h3>${isNew ? 'Neuer Eintrag' : 'Bearbeiten'}</h3>${ctxChip(e.context)}</div>
         ${info ? `<p class="hint">${esc(info)}</p>` : ''}
+        ${isNew && tpls.length ? `<div class="chips">${tpls.map(tp => `<button type="button" class="chip tpl" data-tpl="${tp.id}">${esc(tp.name)}</button>`).join('')}</div>` : ''}
         ${isNew ? `<div class="quick"><input id="f-quick" placeholder="Schnell: Fr 14 Uhr Friseur · bis 15.11. Antrag · bei Kaufland: Milch, Brot" enterkeyhint="done"><button class="btn small" id="quickBtn" type="button">Übernehmen</button></div>` : ''}
         <div class="types">${Object.entries(TYPE).map(([k, v]) => `<button type="button" data-type="${k}" aria-pressed="${e.type === k}"><svg viewBox="0 0 24 24">${v.icon}</svg>${v.label}</button>`).join('')}</div>
         <div class="field"><label for="f-title">${e.type === 'place' ? 'Name der Liste' : 'Was?'}</label><input id="f-title" value="${esc(e.title)}" placeholder="${placeholder}"></div>
         ${typeFields}
+        ${e.type !== 'place' ? `<div class="two"><div class="field"><label for="f-ref">Nummer</label><div class="quick"><input id="f-ref" value="${esc(e.ref || '')}" placeholder="Ticket, RMA, Auftrag" autocapitalize="characters"><button class="btn small icon" id="scanRef" type="button" aria-label="Etikett scannen"><svg viewBox="0 0 24 24"><path d="M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3M8 9v6M11 9v6M14 9v6M17 9v6"/></svg></button></div><div class="chips" id="refChoices"></div></div>
+          <div class="field"><label for="f-contact">Person</label><select id="f-contact">${contactOpts}</select></div></div>
+          <div class="field" id="newContactField" ${e._contactName ? '' : 'hidden'}><label for="f-newcontact">Name der neuen Person</label><input id="f-newcontact" value="${esc(e._contactName || '')}" placeholder="z. B. Frau Jessen"></div>
+          <div class="field"><label>Checkliste</label>${subList}<div class="quick"><input id="f-sub" placeholder="Schritt hinzufügen" enterkeyhint="done"><button class="btn small" id="addSub" type="button">Hinzufügen</button></div></div>` : ''}
+        ${!isNew && e.type !== 'place' ? `<div class="field"><label>Zeitaufwand</label><div class="row-actions" style="margin:0;align-items:center"><button class="btn small ${running ? 'primary' : ''}" id="timerBtn" type="button">${running ? 'Stopp' : 'Start'}</button><span class="sub" ${running ? `data-elapsed="${state.timer.start}" data-base="${loggedMs(e) - (Date.now() - state.timer.start)}"` : ''}>${fmtDur(loggedMs(e))}</span>${e.timeLog?.length ? `<span class="hint">${e.timeLog.length} ${e.timeLog.length === 1 ? 'Abschnitt' : 'Abschnitte'}</span>` : ''}</div></div>` : ''}
         <div class="field"><label for="f-notes">Details</label><textarea id="f-notes" placeholder="Aktenzeichen, Ansprechpartner, was zu tun ist …">${esc(e.notes)}</textarea></div>
         ${e.type !== 'place' ? `<div class="field"><label for="f-case">Vorgang</label><select id="f-case">${caseOpts}</select></div>
         <div class="field" id="newCaseField" hidden><label for="f-newcase">Name des Vorgangs</label><input id="f-newcase" placeholder="z. B. Kfz-Versicherung Schaden"></div>` : ''}
@@ -808,6 +996,7 @@
         ${e.type === 'deadline' || e.ocrText ? `<details class="ocr" ${e.ocrText ? '' : 'open'}><summary>${e.ocrText ? 'Erkannter Text aus dem Brief' : 'Brieftext einfügen und auswerten'}</summary>
           ${e.ocrText ? `<pre>${esc(e.ocrText)}</pre>` : `<div class="field"><textarea id="f-ocr" placeholder="Text aus Brief oder E-Mail hier einfügen …"></textarea></div><button class="btn small" id="analyzeBtn" type="button">Auswerten</button>`}</details>` : ''}
         ${proofFields}
+        <div class="row-actions" style="margin:0">${e.type !== 'place' ? '<button class="btn small ghost" id="asTemplate" type="button">Als Vorlage speichern</button>' : ''}${e.type === 'waiting' ? '<button class="btn small ghost" id="nudgeBtn" type="button">Nachfrage kopieren</button>' : ''}</div>
         <p class="hint" id="formError" hidden></p>
         <div class="sheet-actions">
           ${isNew ? '<button class="btn ghost" data-close>Abbrechen</button>' : `<button class="btn ghost" id="del">${confirmDel ? 'Wirklich löschen?' : 'Löschen'}</button>`}
@@ -817,6 +1006,8 @@
       hydratePhotos(sheetRoot);
       const quickInput = document.getElementById('f-quick');
       if (quickInput) quickInput.onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); applyQuick(); } };
+      const subInput = document.getElementById('f-sub');
+      if (subInput) subInput.onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); addSub(); } };
       if (isNew) setTimeout(() => document.getElementById(quick ? 'f-quick' : 'f-title')?.focus(), 60);
     };
 
@@ -841,6 +1032,9 @@
         e.contract = { termEnd: v('k-end') || t, noticeN: Number(v('k-n')) || 0, noticeUnit: v('k-unit'), renewMonths: Number(v('k-renew')) };
         const r = L.cancelDeadline({ ...e.contract, today: t }); e.contract.termEnd = r.termEnd; e.date = r.lastDay;
       }
+      if (v('f-ref') !== undefined) e.ref = (v('f-ref') || '').trim();
+      if (v('f-contact') !== undefined) { const cv = v('f-contact'); if (cv === '__new') e._contactName = (v('f-newcontact') || '').trim() || e._contactName || ''; else { e.contactId = cv || null; delete e._contactName; } }
+      const fx = document.getElementById('f-flex'); if (fx) e.flex = fx.checked;
       if (v('p-method') !== undefined) e.proof = v('p-method') ? { method: v('p-method'), note: (v('p-note') || '').trim(), at: e.proof?.at || Date.now() } : null;
     };
     function applyQuick() {
@@ -853,16 +1047,46 @@
         e.placeId = r.placeId; e.group = null; e.items = r.items.map(text => ({ text, done: false }));
       }
       if (r.type === 'deadline') { e.received = t; e.leadDays = 3; }
+      if (r.ref) e.ref = r.ref;
+      if (r.flex) e.flex = true;
+      if (r.contact) {
+        const q = r.contact.toLowerCase(), k = state.contacts.find(k => k.name.toLowerCase().includes(q));
+        if (k) e.contactId = k.id; else e._contactName = r.contact;
+      }
       draw();
     }
     draw();
 
     const original = entry ? [...(entry.photos || [])] : [];
+    function addSub() {
+      const inp = document.getElementById('f-sub'); const text = (inp?.value || '').trim(); if (!text) return;
+      read(); e.items.push({ text, done: false }); draw();
+      setTimeout(() => document.getElementById('f-sub')?.focus(), 30);
+    }
+    async function scanRef() {
+      read();
+      const file = await pickMedia({ camera: true, video: false }); if (!file) return;
+      try {
+        const b64 = await fileToJpegBase64(file, 2400);
+        if (!Native) { toast('Scannen geht nur in der iPhone-App'); return; }
+        toast('Etikett wird gelesen …');
+        const codes = (await Native.detectCodes({ base64: b64 }).catch(() => ({ codes: [] }))).codes || [];
+        let text = '';
+        if (!codes.length) text = (await Native.recognizeText({ base64: b64 }).catch(() => ({ text: '' }))).text || '';
+        const cands = [...new Set([...codes, ...(text.match(/\b[A-Z]{0,6}[-/ ]?\d[\dA-Z/-]{3,}\b/g) || []).map(x => x.trim())])].slice(0, 8);
+        e.photos.push(await savePhoto(b64)); noteMedia(e.photos[e.photos.length - 1], Date.now());
+        if (!cands.length) { draw(); return toast('Keine Nummer erkannt, das Foto ist angehängt'); }
+        if (cands.length === 1 && !e.ref) e.ref = cands[0];
+        draw();
+        if (cands.length > 1 || e.ref !== cands[0]) document.getElementById('refChoices').innerHTML = `<span class="hint">Erkannt:</span>` + cands.map(c => `<button type="button" class="chip" data-refpick="${esc(c)}">${esc(c)}</button>`).join('');
+        haptic('success');
+      } catch (err) { toast(err.message); }
+    }
     async function addPhoto(camera, video = false) {
       read();
       const file = await pickMedia({ camera, video });
       if (!file) return;
-      try { e.photos.push(await storeMedia(file)); draw(); } catch (err) { toast('Speichern hat nicht geklappt: ' + err.message); }
+      try { e.photos.push(await storeMedia(file, camera)); draw(); } catch (err) { toast('Speichern hat nicht geklappt: ' + err.message); }
     }
 
     function onClick(ev) {
@@ -874,6 +1098,28 @@
         return openViewer(e.photos, +b.dataset.view, { onDelete: i => { e.photos.splice(i, 1); draw(); } });
       }
       if (b.id === 'quickBtn') return applyQuick();
+      if (b.dataset.tpl) {
+        const tp = state.templates.find(x => x.id === b.dataset.tpl); if (!tp) return;
+        read();
+        const src = JSON.parse(JSON.stringify(tp.entry));
+        Object.assign(e, { ...src, items: (src.items || []).map(i => ({ text: i.text, done: false })), date: e.date || t });
+        if (['deadline', 'waiting'].includes(e.type) && (!e.date || e.date <= t)) e.date = addDays(t, 14);
+        haptic('select'); draw(); setTimeout(() => { const f = document.getElementById('f-title'); f?.focus(); f?.select(); }, 60); return;
+      }
+      if (b.id === 'addSub') return addSub();
+      if (b.dataset.subdel !== undefined) { read(); e.items.splice(+b.dataset.subdel, 1); draw(); return; }
+      if (b.dataset.refpick) { document.getElementById('f-ref').value = b.dataset.refpick; document.getElementById('refChoices').innerHTML = ''; haptic('select'); return; }
+      if (b.id === 'scanRef') return scanRef();
+      if (b.id === 'timerBtn') { read(); toggleTimer(entry); Object.assign(e, { timeLog: JSON.parse(JSON.stringify(entry.timeLog || [])) }); draw(); render(); return; }
+      if (b.id === 'asTemplate') {
+        read();
+        const name = e.title || TYPE[e.type].label;
+        const tmpl = { type: e.type, title: e.title, notes: e.notes, context: e.context, items: e.items.map(i => ({ text: i.text, done: false })), leadDays: e.leadDays, repeat: e.repeat, source: e.source, contactId: e.contactId };
+        const old = state.templates.find(x => x.name === name);
+        if (old) old.entry = tmpl; else state.templates.push({ id: uid(), name, entry: tmpl });
+        save(); toast(`Vorlage „${name}“ gespeichert`); haptic('success'); return;
+      }
+      if (b.id === 'nudgeBtn') { read(); return copyText(nudgeText(e), 'Nachfrage kopiert'); }
       if (b.dataset.type) {
         read(); e.type = b.dataset.type;
         if (e.type === 'deadline' && (!e.date || e.date <= t)) e.date = addDays(t, 14);
@@ -918,7 +1164,11 @@
         }
         if (!e.title) return fail('Schreib kurz, worum es geht.');
         if (['deadline', 'document'].includes(e.type) && !e.date) return fail('Hier fehlt noch ein Datum.');
-        if (e.type !== 'place') { e.items = []; e.group = null; }
+        if (e.type !== 'place') e.group = null;
+        if (e._contactName) {
+          const k = { id: uid(), name: e._contactName, company: '', phone: '', email: '', notes: '', context: ctxOf(e), lastAt: null };
+          state.contacts.push(k); e.contactId = k.id; delete e._contactName;
+        } else if (v('f-contact') === '__new') e.contactId = null;
         delete e._calc;
         if (isNew) state.entries.push({ ...e, id: e.id || uid(), done: false, createdAt: Date.now() });
         else Object.assign(state.entries.find(x => x.id === e.id), e);
@@ -927,6 +1177,8 @@
       }
     }
     function onChange(ev) {
+      if (ev.target.dataset.sub !== undefined) { const i = +ev.target.dataset.sub; e.items[i].done = ev.target.checked; ev.target.closest('li').classList.toggle('got', ev.target.checked); if (ev.target.checked) { haptic('light'); burst(ev.target, 6); } return; }
+      if (ev.target.id === 'f-contact') { const nf = document.getElementById('newContactField'); nf.hidden = ev.target.value !== '__new'; if (!nf.hidden) document.getElementById('f-newcontact').focus(); }
       if (ev.target.id === 'f-place') document.getElementById('newPlaceField').hidden = ev.target.value !== '__new';
       if (ev.target.id === 'f-case') document.getElementById('newCaseField').hidden = ev.target.value !== '__new';
       if (['k-end', 'k-n', 'k-unit', 'k-renew'].includes(ev.target.id)) { read(); draw(); }
@@ -948,6 +1200,7 @@
           : `<img data-photo="${esc(p)}" alt="" draggable="false">`}</div>`).join('')}</div>
         <div class="v-bar"><button class="v-btn" data-vclose aria-label="Schließen">${x}</button><span class="v-count"></span>
           <span class="v-actions">${Share && FS ? `<button class="v-btn" data-vshare aria-label="Teilen">${shareI}</button>` : ''}${onDelete ? `<button class="v-btn" data-vdel aria-label="Entfernen">${trashI}</button>` : ''}</span></div>
+        <div class="v-cap"></div>
         ${items.length > 1 ? `<div class="v-dots">${items.map((_, i) => `<i data-i="${i}"></i>`).join('')}</div>` : ''}`;
       hydratePhotos(v).then(() => v.querySelectorAll('video').forEach(el => { el.src = el.src.replace(/#t=.*$/, ''); }));
       go(idx, false);
@@ -973,6 +1226,7 @@
       const st = strip(); st.style.transition = anim && motionOn() ? 'transform .34s cubic-bezier(.22,.8,.24,1)' : 'none';
       st.style.transform = `translateX(${-idx * 100}%)`;
       v.querySelector('.v-count').textContent = items.length > 1 ? `${idx + 1} / ${items.length}` : '';
+      v.querySelector('.v-cap').textContent = mediaCaption(items[idx]);
       v.querySelectorAll('.v-dots i').forEach((d, k) => d.classList.toggle('on', k === idx));
       armedDel = false; v.querySelector('[data-vdel]')?.classList.remove('armed');
     }
@@ -1085,12 +1339,13 @@
       ${p.kind === 'store' ? `<div class="field"><label for="o-group">Gehört zu</label><select id="o-group"><option value="">Keine Gruppe</option>${Object.entries(GROUPS).map(([g, n]) => `<option value="${g}" ${p.group === g ? 'selected' : ''}>${n}</option>`).join('')}</select></div>` : ''}
       ${p.kind !== 'person' ? `<div class="field"><label for="o-radius">Radius</label><select id="o-radius">${[100, 150, 200, 300, 500].map(r => `<option value="${r}" ${p.radius == r ? 'selected' : ''}>${r} m</option>`).join('')}</select></div>
       <p class="hint">${p.lat != null ? 'Standort ist gespeichert.' : 'Den Standort speicherst du, wenn du dort bist: „Standort hier speichern“.'}</p>` : '<p class="hint">Listen für Personen erscheinen unter „Wenn du … siehst“.</p>'}
+      ${p.kind !== 'person' ? `<label class="setting" style="cursor:pointer"><div><div class="title">Arbeitszeit hier erfassen</div><div class="hint">Kommen und Gehen automatisch, wenn der Standort gespeichert ist (Standort „Immer“)</div></div><input type="checkbox" class="switch" id="o-track" ${p.trackTime ? 'checked' : ''}></label>` : ''}
       <div class="field"><label>Zeigen in</label><div class="seg">${[['beide', 'Beiden Bereichen'], ['privat', 'Privat'], ['arbeit', 'Arbeit']].map(([k, l]) => `<button type="button" data-parea="${k}" aria-pressed="${(p.area || 'beide') === k}">${l}</button>`).join('')}</div></div>
       <p class="hint" id="formError" hidden></p>
       <div class="sheet-actions">${isNew ? '<button class="btn ghost" data-close>Abbrechen</button>' : `<button class="btn ghost" id="delPlace">${confirmDel ? 'Wirklich löschen?' : 'Löschen'}</button>`}<button class="btn primary" id="savePlace">Speichern</button></div>`,
       'Ort', ev => {
         const b = ev.target.closest('button'); if (!b) return;
-        const read = () => { p.name = (document.getElementById('o-name').value || '').trim(); const g = document.getElementById('o-group'); p.group = g ? (g.value || null) : null; const r = document.getElementById('o-radius'); if (r) p.radius = Number(r.value); };
+        const read = () => { p.name = (document.getElementById('o-name').value || '').trim(); const g = document.getElementById('o-group'); p.group = g ? (g.value || null) : null; const r = document.getElementById('o-radius'); if (r) p.radius = Number(r.value); const tr = document.getElementById('o-track'); if (tr) { p.trackTime = tr.checked; if (tr.checked && p.area === 'beide') p.area = 'arbeit'; } };
         if (b.dataset.kind) { read(); p.kind = b.dataset.kind; if (p.kind !== 'store') p.group = null; draw(); }
         if (b.dataset.parea) { read(); p.area = b.dataset.parea; draw(); }
         if (b.id === 'delPlace') {
@@ -1103,6 +1358,7 @@
           read();
           if (!p.name) { const err = document.getElementById('formError'); err.hidden = false; err.textContent = 'Gib dem Ort einen Namen.'; return; }
           if (isNew) state.places.push(p); else Object.assign(state.places.find(x => x.id === p.id), p);
+          if (p.trackTime && Native && locationStatus !== 'always') Native.requestAlwaysLocation().then(refreshLocationStatus).catch(() => {});
           save(); closeSheet(); render();
         }
       });
@@ -1111,34 +1367,242 @@
 
   function openCaseSheet(c) {
     let confirmClose = false;
+    const word = () => ctxOf(c) === 'arbeit' ? 'Projekt' : 'Vorgang';
     const draw = () => {
       const es = state.entries.filter(e => e.caseId === c.id).sort((a, b) => (a.received || a.date || '').localeCompare(b.received || b.date || '') || a.createdAt - b.createdAt);
       const photos = es.flatMap(e => e.photos || []);
+      const people = [...new Set(es.map(e => e.contactId).filter(Boolean))].map(contactById).filter(Boolean);
+      const ms = es.reduce((a, e) => a + loggedMs(e), 0);
       showSheet(`
-        <div class="sheet-head"><h3>Vorgang</h3>${ctxChip(ctxOf(c))}</div>
+        <div class="sheet-head"><h3>${word()}</h3>${ctxChip(ctxOf(c))}</div>
         <div class="field"><label for="v-title" class="sr-only">Name</label><input id="v-title" value="${esc(c.title)}"></div>
+        <div class="chips">${Object.entries(CASE_STATUS).map(([k, l]) => `<button type="button" class="chip" data-status="${k}" aria-pressed="${(c.status || 'offen') === k}">${l}</button>`).join('')}</div>
+        <div class="field"><label for="v-next">Nächster Schritt</label><input id="v-next" value="${esc(c.next || '')}" placeholder="z. B. Gerät vom Kunden abwarten"></div>
+        ${people.length || ms >= 60e3 ? `<div class="sub">${[people.map(k => `<button type="button" class="tag person" data-contactopen="${k.id}">${esc(k.name)}</button>`).join(' '), ms >= 60e3 ? `Zeitaufwand ${fmtDur(ms)}` : ''].filter(Boolean).join(' · ')}</div>` : ''}
         ${mediaThumbs(photos)}
         <ul class="timeline">${es.map(e => `<li><span class="when">${(e.received || e.date) ? parse(e.received || e.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'}</span>
-          <div class="body" data-editcase="${e.id}" style="cursor:pointer"><div class="title">${esc(e.title)}${e.done ? ' ✓' : ''}</div><div class="desc">${TYPE[e.type].label}${e.date && e.type === 'deadline' ? ` · Frist ${fmtDate(e.date)}` : ''}${e.proof ? ` · ${esc(e.proof.method)}` : ''}</div></div></li>`).join('') || '<li><span></span><span class="sub">Noch keine Einträge.</span></li>'}</ul>
-        <div class="row-actions"><button class="btn small" id="caseAdd">Eintrag hinzufügen</button><button class="btn small" id="caseScan">Brief scannen</button><button class="btn small ghost" id="caseCopy">Kopieren</button></div>
+          <div class="body" data-editcase="${e.id}" style="cursor:pointer"><div class="title">${esc(e.title)}${e.done ? ' ✓' : ''}</div><div class="desc">${[TYPE[e.type].label, e.ref, e.date && e.type === 'deadline' ? `Frist ${fmtDate(e.date)}` : '', e.items?.length && e.type !== 'place' ? `${e.items.filter(i => i.done).length}/${e.items.length} Schritte` : '', e.proof ? esc(e.proof.method) : ''].filter(Boolean).map(esc).join(' · ')}</div></div></li>`).join('') || '<li><span></span><span class="sub">Noch keine Einträge.</span></li>'}</ul>
+        <div class="row-actions"><button class="btn small" id="caseAdd">Eintrag hinzufügen</button><button class="btn small" id="caseScan">Brief scannen</button><button class="btn small ghost" id="caseCopy">Kopieren</button><button class="btn small ghost" id="casePdf">Als PDF teilen</button></div>
         <div class="sheet-actions"><button class="btn ghost" id="caseClose">${confirmClose ? 'Wirklich abschließen?' : 'Abschließen'}</button><button class="btn primary" id="caseSave">Fertig</button></div>`,
-        'Vorgang', async ev => {
+        word(), async ev => {
           const b = ev.target.closest('button, img[data-view], [data-editcase]'); if (!b) return;
-          if (b.dataset.view !== undefined && b.closest('.photos')) return openViewer(photos, +b.dataset.view);
           const title = (document.getElementById('v-title').value || '').trim(); if (title) c.title = title;
+          c.next = (document.getElementById('v-next').value || '').trim();
           if (b.dataset.view !== undefined) return openViewer(photos, +b.dataset.view);
+          if (b.dataset.status) { c.status = b.dataset.status; save(); haptic('select'); sheetRoot.querySelectorAll('[data-status]').forEach(x => x.setAttribute('aria-pressed', x === b)); return; }
+          if (b.dataset.contactopen) { save(); return openContactSheet(contactById(b.dataset.contactopen)); }
           if (b.dataset.ctxToggle !== undefined) { c.context = ctxOf(c) === 'arbeit' ? 'privat' : 'arbeit'; es.forEach(e => { e.context = c.context; }); save(); haptic('select'); return draw(); }
           if (b.dataset.editcase) { save(); return openSheet(state.entries.find(e => e.id === b.dataset.editcase)); }
           if (b.id === 'caseAdd') { save(); return openSheet(null, { type: 'task', caseId: c.id }); }
-          if (b.id === 'caseScan') { save(); closeSheet(); const before = state.entries.length; await scanLetter(); return; }
-          if (b.id === 'caseCopy') return copyText(`Vorgang: ${c.title}\n\n` + es.map(entryText).join('\n\n'), 'Vorgang kopiert');
-          if (b.id === 'caseClose') { if (!confirmClose) { confirmClose = true; draw(); return; } c.closed = true; logDone({ id: c.id, type: 'case', context: ctxOf(c) }, `Vorgang abgeschlossen: ${c.title}`); save(); closeSheet(); render(); return; }
+          if (b.id === 'caseScan') { save(); closeSheet(); await scanLetter(); return; }
+          if (b.id === 'caseCopy') return copyText(caseText(c), `${word()} kopiert`);
+          if (b.id === 'casePdf') { save(); return sharePdf(`${word()} ${c.title}`, await caseReportHtml(c)); }
+          if (b.id === 'caseClose') { if (!confirmClose) { confirmClose = true; draw(); return; } c.closed = true; logDone({ id: c.id, type: 'case', context: ctxOf(c) }, `${word()} abgeschlossen: ${c.title}`); save(); closeSheet(); render(); return; }
           if (b.id === 'caseSave') { save(); closeSheet(); render(); }
         });
       hydratePhotos(sheetRoot);
     };
     draw();
   }
+  function caseText(c) {
+    const es = state.entries.filter(e => e.caseId === c.id);
+    return [`${ctxOf(c) === 'arbeit' ? 'Projekt' : 'Vorgang'}: ${c.title}`, `Status: ${CASE_STATUS[c.status || 'offen']}`, c.next && `Nächster Schritt: ${c.next}`].filter(Boolean).join('\n') + '\n\n' + es.map(entryText).join('\n\n');
+  }
+
+  /* ---------- Berichte als Text: Woche und Standup ---------- */
+  const weekNo = day => { const d = parse(day); d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7); const y = new Date(d.getFullYear(), 0, 4); return 1 + Math.round(((d - y) / 864e5 - 3 + (y.getDay() + 6) % 7) / 7); };
+  const logLine = l => {
+    const e = state.entries.find(x => x.id === l.entryId), who = e && contactById(e.contactId);
+    const extra = [e?.ref, who?.name, e?.proof && `per ${e.proof.method}${e.proof.note ? ' ' + e.proof.note : ''}`, e && e.timeLog?.length && fmtDur(loggedMs(e))].filter(Boolean);
+    return `- ${hhmm(l.at)} ${l.title}${extra.length ? ` (${extra.join(', ')})` : ''}`;
+  };
+  function weekReport() {
+    const t = today(), mo = L.mondayOf(t), su = addDays(mo, 6);
+    const out = [`Wochenbericht KW ${weekNo(t)} (${shortDate(mo).slice(0, 6)} bis ${shortDate(su)})${area() !== 'alle' ? ' – ' + AREAS[area()] : ''}`];
+    if (area() !== 'privat') { const wk = weekWorkMs(t); out.push(`Arbeitszeit: ${fmtDur(wk)} (Soll ${state.settings.weeklyHours || 40} h)`); }
+    const logs = state.log.filter(l => logInArea(l) && iso(new Date(l.at)) >= mo && iso(new Date(l.at)) <= su).reverse();
+    out.push('', `Erledigt (${logs.length}):`);
+    let last = null;
+    logs.forEach(l => { const d = iso(new Date(l.at)); if (d !== last) { out.push(parse(d).toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'numeric' }) + ':'); last = d; } out.push(logLine(l)); });
+    if (!logs.length) out.push('- noch nichts');
+    const cases = state.cases.filter(c => !c.closed && inArea(c));
+    if (cases.length) { out.push('', area() === 'arbeit' ? 'Projekte:' : 'Vorgänge:'); cases.forEach(c => out.push(`- ${c.title}: ${CASE_STATUS[c.status || 'offen']}${c.next ? ' · nächster Schritt: ' + c.next : ''}`)); }
+    const waiting = state.entries.filter(e => e.type === 'waiting' && !e.done && inArea(e));
+    if (waiting.length) { out.push('', 'Wartet auf:'); waiting.forEach(e => out.push(`- ${e.title}${e.ref ? ' (' + e.ref + ')' : ''} bei ${contactById(e.contactId)?.name || e.source || '?'}${e.received ? ' seit ' + shortDate(e.received).slice(0, 6) : ''}`)); }
+    const next = state.entries.filter(e => inArea(e) && !e.done && e.date && e.date > su && daysBetween(su, e.date) <= 7 && e.type !== 'place');
+    if (next.length) { out.push('', 'Nächste Woche:'); next.sort((a, b) => a.date.localeCompare(b.date)).forEach(e => out.push(`- ${fmtDate(e.date)} ${e.title}`)); }
+    return out.join('\n');
+  }
+  function standupText() {
+    const t = today(), ctx = area() === 'alle' ? null : area();
+    const inC = l => !ctx || logInArea(l);
+    // letzter Tag mit Erledigtem, höchstens eine Woche zurück
+    let prev = addDays(t, -1);
+    for (let i = 0; i < 7 && !state.log.some(l => iso(new Date(l.at)) === prev && inC(l)); i++) prev = addDays(prev, -1);
+    if (!state.log.some(l => iso(new Date(l.at)) === prev && inC(l))) prev = addDays(t, -1);
+    const y = state.log.filter(l => iso(new Date(l.at)) === prev && inC(l)).reverse();
+    const m = dayModel(t);
+    const todo = [...m.overdue, ...m.todays.filter(e => !e.done), ...m.week.slice(0, 3)];
+    const blocked = [...state.entries.filter(e => e.type === 'waiting' && !e.done && inArea(e)), ...state.cases.filter(c => !c.closed && inArea(c) && ['kunde', 'kollege'].includes(c.status))];
+    const out = [`Standup ${longDate(t)}`, '', `${daysBetween(prev, t) === 1 ? 'Gestern' : parse(prev).toLocaleDateString('de-DE', { weekday: 'long' })}:`];
+    out.push(...(y.length ? y.map(l => logLine(l).replace(/^- \d\d:\d\d /, '- ')) : ['- nichts abgehakt']));
+    out.push('', 'Heute:', ...(todo.length ? todo.map(e => `- ${e.title}${e.ref ? ' (' + e.ref + ')' : ''}${e.items?.length && e.type !== 'place' ? ` [${e.items.filter(i => i.done).length}/${e.items.length}]` : ''}`) : ['- noch nichts geplant']));
+    if (state.handover?.text && state.handover.date < t) out.push('', 'Notiz von gestern:', state.handover.text);
+    if (blocked.length) out.push('', 'Wartet auf / blockiert:', ...blocked.map(x => x.status ? `- ${x.title}: ${CASE_STATUS[x.status]}` : `- ${x.title} bei ${contactById(x.contactId)?.name || x.source || '?'}`));
+    return out.join('\n');
+  }
+
+  /* ---------- PDF-Bericht ---------- */
+  async function caseReportHtml(c) {
+    const es = state.entries.filter(e => e.caseId === c.id).sort((a, b) => (a.received || a.date || '').localeCompare(b.received || b.date || '') || a.createdAt - b.createdAt);
+    const people = [...new Set(es.map(e => e.contactId).filter(Boolean))].map(contactById).filter(Boolean);
+    const img = async p => { try { return 'data:image/jpeg;base64,' + await readPhotoBase64(p); } catch { return ''; } };
+    let body = '';
+    for (const e of es) {
+      const when = e.received || e.date;
+      let ph = '';
+      for (const p of e.photos || []) {
+        if (isVideo(p)) { ph += `<p class="cap">Video${state.media[p] ? ' vom ' + esc(mediaCaption(p)) : ''} (in der App)</p>`; continue; }
+        const src = await img(p); if (src) ph += `<figure><img src="${src}"><figcaption>${esc(mediaCaption(p))}</figcaption></figure>`;
+      }
+      body += `<section><h2>${esc(e.title)}${e.done ? ' ✓' : ''}</h2><p class="meta">${[when && shortDate(when), TYPE[e.type].label, e.ref, contactById(e.contactId)?.name, e.type === 'deadline' && e.date && `Frist ${shortDate(e.date)}`, e.proof && `Nachweis: ${e.proof.method}${e.proof.note ? ' – ' + e.proof.note : ''}`, e.timeLog?.length && `Zeit ${fmtDur(loggedMs(e))}`].filter(Boolean).map(esc).join(' · ')}</p>
+        ${e.notes ? `<p class="notes">${esc(e.notes).replace(/\n/g, '<br>')}</p>` : ''}
+        ${e.type !== 'place' && e.items?.length ? `<ul class="check">${e.items.map(i => `<li>${i.done ? '☑' : '☐'} ${esc(i.text)}</li>`).join('')}</ul>` : ''}
+        ${ph}</section>`;
+    }
+    return `<!doctype html><html lang="de"><head><meta charset="utf-8"><style>
+      body { font-family: -apple-system, "Helvetica Neue", sans-serif; color: #1F2522; font-size: 11pt; line-height: 1.45; margin: 0; }
+      h1 { font-size: 20pt; margin: 0 0 4pt; } h2 { font-size: 13pt; margin: 0 0 2pt; }
+      .sub { color: #6E7670; font-size: 10pt; margin: 0 0 14pt; } .meta { color: #6E7670; font-size: 9.5pt; margin: 0 0 6pt; }
+      section { border-top: 1px solid #E1E3DD; padding: 10pt 0; page-break-inside: avoid; }
+      .notes { margin: 4pt 0; } ul.check { list-style: none; padding: 0; margin: 4pt 0; }
+      figure { margin: 8pt 0; } img { max-width: 100%; max-height: 420pt; border-radius: 4pt; } figcaption, .cap { color: #6E7670; font-size: 9pt; margin-top: 3pt; }
+    </style></head><body>
+      <h1>${esc(c.title)}</h1>
+      <p class="sub">${[ctxOf(c) === 'arbeit' ? 'Projekt' : 'Vorgang', CASE_STATUS[c.status || 'offen'], c.next && 'Nächster Schritt: ' + c.next, people.length && 'Personen: ' + people.map(k => k.name + (k.company ? ' (' + k.company + ')' : '')).join(', '), 'Stand ' + new Date().toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })].filter(Boolean).map(esc).join(' · ')}</p>
+      ${body || '<p>Noch keine Einträge.</p>'}
+      <p class="sub" style="margin-top:20pt">Erstellt mit WDID</p></body></html>`;
+  }
+  async function sharePdf(name, html) {
+    const safe = name.replace(/[^\wäöüÄÖÜß .-]+/g, '').trim().slice(0, 60) || 'WDID-Bericht';
+    try {
+      if (Native && Share) {
+        toast('PDF wird erstellt …');
+        const { uri } = await Native.makePdf({ html, name: safe });
+        await Share.share({ title: safe, files: [uri] });
+      } else {
+        const w = window.open(URL.createObjectURL(new Blob([html], { type: 'text/html' })));
+        if (w) setTimeout(() => { try { w.print(); } catch {} }, 600); else toast('Pop-up blockiert');
+      }
+    } catch (err) { if (!/cancel/i.test(err.message || '')) toast('PDF hat nicht geklappt: ' + err.message); }
+  }
+
+  /* ---------- Personen ---------- */
+  const lastContact = k => Math.max(k.lastAt || 0, ...state.log.filter(l => { const e = state.entries.find(x => x.id === l.entryId); return e && e.contactId === k.id; }).map(l => l.at)) || null;
+  const relDay = ts => { const d = daysBetween(iso(new Date(ts)), today()); return d === 0 ? 'heute' : d === 1 ? 'gestern' : d < 7 ? `vor ${d} Tagen` : `am ${shortDate(iso(new Date(ts)))}`; };
+  function openContactSheet(k) {
+    const isNew = !k;
+    const c = k ? { ...k } : { id: uid(), name: '', company: '', phone: '', email: '', notes: '', context: defaultCtx(), lastAt: null };
+    let confirmDel = false;
+    const draw = () => {
+      const es = isNew ? [] : state.entries.filter(e => e.contactId === c.id);
+      const open = es.filter(e => !e.done).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999')), done = es.filter(e => e.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+      const last = isNew ? null : lastContact(c);
+      const tel = c.phone.replace(/[^\d+]/g, '');
+      showSheet(`
+        <div class="sheet-head"><h3>${isNew ? 'Neue Person' : esc(c.name)}</h3>${ctxChip(ctxOf(c))}</div>
+        <div class="two"><div class="field"><label for="k-name">Name</label><input id="k-name" value="${esc(c.name)}" placeholder="z. B. Frau Jessen"></div>
+        <div class="field"><label for="k-company">Firma oder Rolle</label><input id="k-company" value="${esc(c.company)}" placeholder="z. B. Muster GmbH"></div></div>
+        <div class="two"><div class="field"><label for="k-phone">Telefon</label><input id="k-phone" type="tel" value="${esc(c.phone)}"></div>
+        <div class="field"><label for="k-email">E-Mail</label><input id="k-email" type="email" value="${esc(c.email)}" autocapitalize="off"></div></div>
+        ${!isNew && (tel || c.email) ? `<div class="row-actions" style="margin:0">${tel ? `<a class="btn small" href="tel:${esc(tel)}">Anrufen</a>` : ''}${c.email ? `<a class="btn small" href="mailto:${esc(c.email)}">E-Mail</a>` : ''}</div>` : ''}
+        <div class="field"><label for="k-notes">Notizen</label><textarea id="k-notes" placeholder="Zuständig für, erreichbar wann, worauf achten">${esc(c.notes)}</textarea></div>
+        ${isNew ? '' : `<div class="card-row"><span class="sub">${last ? `Letzter Kontakt ${relDay(last)}` : 'Noch kein Kontakt notiert'}</span><button class="btn small" id="k-touch" type="button">Kontakt gehabt</button></div>
+        <div class="dept">Offen (${open.length})</div>
+        ${open.length ? `<ul class="timeline">${open.map(e => `<li><span class="when">${e.date ? fmtDate(e.date) : '—'}</span><div class="body" data-kedit="${e.id}" style="cursor:pointer"><div class="title">${esc(e.title)}</div><div class="desc">${[TYPE[e.type].label, e.ref].filter(Boolean).map(esc).join(' · ')}</div></div></li>`).join('')}</ul>` : '<p class="hint">Nichts offen.</p>'}
+        ${done.length ? `<div class="dept">Erledigt</div><ul class="timeline">${done.slice(0, 10).map(e => `<li><span class="when">${e.doneAt ? shortDate(iso(new Date(e.doneAt))).slice(0, 6) : ''}</span><div class="body" data-kedit="${e.id}" style="cursor:pointer"><div class="title">${esc(e.title)}</div></div></li>`).join('')}</ul>` : ''}
+        <div class="row-actions"><button class="btn small" id="k-new">Eintrag für ${esc(c.name.split(' ').slice(-1)[0] || 'Person')}</button><button class="btn small ghost" id="k-copy">Kopieren</button></div>`}
+        <p class="hint" id="formError" hidden></p>
+        <div class="sheet-actions">${isNew ? '<button class="btn ghost" data-close>Abbrechen</button>' : `<button class="btn ghost" id="k-del">${confirmDel ? 'Wirklich löschen?' : 'Löschen'}</button>`}<button class="btn primary" id="k-save">${isNew ? 'Speichern' : 'Fertig'}</button></div>`,
+        'Person', ev => {
+          const b = ev.target.closest('button, [data-kedit]'); if (!b) return;
+          const read = () => { ['name', 'company', 'phone', 'email', 'notes'].forEach(f => { c[f] = (document.getElementById('k-' + f).value || '').trim(); }); };
+          read();
+          const commit = () => { if (isNew) state.contacts.push(c); else Object.assign(state.contacts.find(x => x.id === c.id), c); save(); };
+          if (b.dataset.ctxToggle !== undefined) { c.context = ctxOf(c) === 'arbeit' ? 'privat' : 'arbeit'; haptic('select'); return draw(); }
+          if (b.dataset.kedit) { commit(); return openSheet(state.entries.find(e => e.id === b.dataset.kedit)); }
+          if (b.id === 'k-touch') { c.lastAt = Date.now(); commit(); state.log.unshift({ id: uid(), entryId: null, title: `Kontakt mit ${c.name}`, type: 'contact', at: Date.now(), ctx: ctxOf(c), contactId: c.id }); save(); haptic('light'); toast('Notiert'); return draw(); }
+          if (b.id === 'k-new') { commit(); return openSheet(null, { type: 'task', contactId: c.id }); }
+          if (b.id === 'k-copy') return copyText([`Person: ${c.name}`, c.company && `Firma: ${c.company}`, c.phone && `Telefon: ${c.phone}`, c.email && `E-Mail: ${c.email}`, c.notes && `Notizen: ${c.notes}`,
+            open.length && '\nOffen:\n' + open.map(e => `- ${e.title}${e.ref ? ' (' + e.ref + ')' : ''}${e.date ? ' · ' + fmtDate(e.date) : ''}`).join('\n')].filter(Boolean).join('\n'), 'Person kopiert');
+          if (b.id === 'k-del') {
+            if (!confirmDel) { confirmDel = true; return draw(); }
+            state.contacts = state.contacts.filter(x => x.id !== c.id); state.entries.forEach(e => { if (e.contactId === c.id) e.contactId = null; });
+            save(); closeSheet(); render(); return;
+          }
+          if (b.id === 'k-save') {
+            if (!c.name) { const err = document.getElementById('formError'); err.hidden = false; err.textContent = 'Gib der Person einen Namen.'; return; }
+            commit(); closeSheet(); render();
+          }
+        });
+    };
+    draw();
+  }
+
+  /* ---------- Arbeitszeit eines Tages korrigieren ---------- */
+  function openWorkDaySheet(day) {
+    const list = JSON.parse(JSON.stringify(state.work[day] || []));
+    const t2 = ts => ts ? hhmm(ts) : '';
+    const toTs = v => { if (!v) return null; const [h, m] = v.split(':').map(Number); const d = parse(day); d.setHours(h, m, 0, 0); return d.getTime(); };
+    const draw = () => showSheet(`
+      <h3>Arbeitszeit ${longDate(day)}</h3>
+      ${list.length ? list.map((x, i) => `<div class="setting"><div class="row-actions" style="margin:0"><input type="time" data-ws="${i}" value="${t2(x.start)}"><span>bis</span><input type="time" data-we="${i}" value="${t2(x.end)}"></div><button class="icon-btn" data-wdel="${i}" aria-label="Abschnitt löschen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`).join('') : '<p class="hint">Noch nichts erfasst.</p>'}
+      <div class="row-actions"><button class="btn small" id="wAdd">Abschnitt hinzufügen</button></div>
+      <p class="hint">Leeres Ende heißt: läuft noch.</p>
+      <div class="sheet-actions"><button class="btn ghost" data-close>Abbrechen</button><button class="btn primary" id="wSave">Speichern</button></div>`,
+      'Arbeitszeit', ev => {
+        const b = ev.target.closest('button'); if (!b) return;
+        readW();
+        if (b.dataset.wdel !== undefined) { list.splice(+b.dataset.wdel, 1); return draw(); }
+        if (b.id === 'wAdd') { const st = toTs(state.settings.workStart), en = toTs(state.settings.workEnd); list.push({ start: st, end: en, src: 'hand' }); return draw(); }
+        if (b.id === 'wSave') {
+          state.work[day] = list.filter(x => x.start).map(x => ({ ...x, end: x.end && x.end < x.start ? x.end + 864e5 : x.end })).sort((a, b) => a.start - b.start);
+          if (!state.work[day].length) delete state.work[day];
+          save(); closeSheet(); render(); toast('Arbeitszeit gespeichert');
+        }
+      });
+    const readW = () => list.forEach((x, i) => { const s1 = sheetRoot.querySelector(`[data-ws="${i}"]`), e1 = sheetRoot.querySelector(`[data-we="${i}"]`); if (s1) x.start = toTs(s1.value); if (e1) x.end = toTs(e1.value); });
+    draw();
+  }
+
+  /* ---------- Feierabend-Übergabe ---------- */
+  function openHandover() {
+    const t = today(), m = dayModel(t, { ctx: 'arbeit' });
+    const open = [...m.overdue, ...m.todays.filter(e => !e.done), ...m.week];
+    const waiting = state.entries.filter(e => e.type === 'waiting' && !e.done && ctxOf(e) === 'arbeit');
+    const prev = state.handover && state.handover.date === t ? state.handover.text : '';
+    showSheet(`
+      <h3>Feierabend-Übergabe</h3>
+      <p class="hint">Was machst du morgen zuerst? Steht morgen früh ganz oben im Arbeitsbereich.</p>
+      ${open.length ? `<div class="dept">Noch offen</div><div class="chips">${open.slice(0, 12).map(e => `<button type="button" class="chip add" data-hpick="${esc(e.title)}">${esc(e.title)}</button>`).join('')}</div>` : '<p class="hint">Alles erledigt für heute.</p>'}
+      ${waiting.length ? `<p class="hint">Wartet auf: ${waiting.map(e => esc(e.title)).join(', ')}</p>` : ''}
+      <div class="field"><label for="h-text">Morgen zuerst</label><textarea id="h-text" placeholder="1. …">${esc(prev)}</textarea></div>
+      <div class="sheet-actions"><button class="btn ghost" data-close>Später</button><button class="btn primary" id="hSave">Speichern${openWorkSession() ? ' und gehen' : ''}</button></div>`,
+      'Feierabend-Übergabe', ev => {
+        const b = ev.target.closest('button'); if (!b) return;
+        const ta = document.getElementById('h-text');
+        if (b.dataset.hpick) { ta.value = (ta.value.trim() ? ta.value.trim() + '\n' : '') + '- ' + b.dataset.hpick; b.remove(); return; }
+        if (b.id === 'hSave') {
+          state.handover = { text: ta.value.trim(), date: t };
+          if (openWorkSession()) stopWork();
+          if (state.settings.autoArea || area() === 'arbeit') { state.settings.area = 'privat'; applyArea(); }
+          save(); closeSheet(); render({ enter: true });
+          if (dayOpenCountCtx('arbeit') === 0) confetti();
+          haptic('success'); toast('Schönen Feierabend');
+        }
+      });
+  }
+  const dayOpenCountCtx = ctx => { const m = dayModel(today(), { ctx }); return [...m.overdue, ...m.todays].filter(e => !e.done).length; };
 
   function openReview() {
     const draw = () => {
@@ -1181,18 +1645,27 @@
       <div class="setting"><div><div class="title">Bundesland</div><div class="hint">Für Feiertage im Fristrechner</div></div><select id="s-state">${Object.entries(L.STATES).map(([k, n]) => `<option value="${k}" ${s.state === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
       <div class="setting"><div><div class="title">Morgen-Briefing</div><div class="hint">Eine Mitteilung mit allem für den Tag</div></div><div class="row-actions" style="margin:0"><input type="time" id="s-morningTime" value="${s.morningTime}">${sw('s-morningOn', s.morningOn)}</div></div>
       <div class="setting"><div><div class="title">Tagesabschluss</div><div class="hint">Rückblick und Offenes verschieben</div></div><div class="row-actions" style="margin:0"><input type="time" id="s-eveningTime" value="${s.eveningTime}">${sw('s-eveningOn', s.eveningOn)}</div></div>
+      <div class="dept">Arbeit</div>
+      <div class="setting"><div><div class="title">Arbeits-Briefing</div><div class="hint">Zu Arbeitsbeginn eine Mitteilung nur mit der Arbeit. Das Morgen-Briefing zeigt dann nur Privates.</div></div>${sw('s-workBriefing', s.workBriefing)}</div>
+      <div class="setting"><div><div class="title">Feierabend-Übergabe</div><div class="hint">Zum Arbeitsende kurz notieren, was morgen zuerst dran ist</div></div>${sw('s-handoverOn', s.handoverOn)}</div>
+      <div class="setting"><div><div class="title">Soll pro Woche</div><div class="hint">Für Arbeitszeit und Überstunden</div></div><div class="row-actions" style="margin:0;align-items:center"><input type="number" id="s-weeklyHours" min="1" max="80" step="0.5" value="${s.weeklyHours}" style="width:72px"><span class="sub">h</span></div></div>
       <div class="setting"><div><div class="title">Bereich automatisch wechseln</div><div class="hint">In der Arbeitszeit Arbeit, danach Privat. Von Hand umschalten geht immer.</div></div>${sw('s-autoArea', s.autoArea)}</div>
       <div class="setting"><div><div class="title">Arbeitszeit</div><div class="chips" style="margin-top:6px">${[1, 2, 3, 4, 5, 6, 0].map(d => `<button type="button" class="chip" data-workday="${d}" aria-pressed="${s.workDays.includes(d)}">${['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][d]}</button>`).join('')}</div></div><div class="row-actions" style="margin:0"><input type="time" id="s-workStart" value="${s.workStart}"><input type="time" id="s-workEnd" value="${s.workEnd}"></div></div>
       ${native ? `<div class="setting"><div><div class="title">Mit Face ID sperren</div><div class="hint">Beim Öffnen der App</div></div>${sw('s-lock', s.lock)}</div>` : ''}
+      <div class="dept">Vorlagen</div>
+      ${state.templates.length ? state.templates.map(tp => `<div class="setting"><div><div class="title">${esc(tp.name)}</div><div class="hint">${[TYPE[tp.entry.type]?.label, ctxOf(tp.entry) === 'arbeit' ? 'Arbeit' : 'Privat', tp.entry.items?.length ? tp.entry.items.length + ' Schritte' : ''].filter(Boolean).join(' · ')}</div></div><button class="btn small ghost" data-tpldel="${tp.id}">Löschen</button></div>`).join('') : '<p class="hint">Noch keine. Im Eintrag unten auf „Als Vorlage speichern“ tippen.</p>'}
       <div class="dept">Backup</div>
       <div class="field"><label for="b-pass">Passwort für das Backup (optional)</label><input id="b-pass" type="password" autocomplete="new-password" placeholder="Leer lassen für unverschlüsselt"></div>
       <div class="row-actions"><button class="btn" id="exportBtn">Backup exportieren</button><button class="btn ghost" id="importBtn">Backup einspielen</button></div>
       <div id="importArea"></div>
       <div class="dept">Kurzbefehl für den Action-Button</div>
       <p class="hint">Kurzbefehle-App → neuer Kurzbefehl → „URL öffnen“ mit <b>wdid://neu</b> (neuer Eintrag mit Schnelleingabe) oder <b>wdid://scan</b> (Brief scannen). Dann unter Einstellungen → Action-Button → Kurzbefehl auswählen. Diktieren geht mit dem Mikrofon der Tastatur, auch offline.</p>
+      <div class="dept">Mit dem iOS-Fokus koppeln</div>
+      <p class="hint">Kurzbefehle-App → Automation → Fokus „Arbeit“ → „Wenn aktiviert“ → Aktion „URL öffnen“ mit <b>wdid://bereich/arbeit</b>. Eine zweite Automation „Wenn deaktiviert“ mit <b>wdid://bereich/privat</b>. Außerdem gibt es <b>wdid://kommen</b>, <b>wdid://gehen</b> und <b>wdid://uebergabe</b>.</p>
       <div class="sheet-actions"><button class="btn primary" data-close>Fertig</button></div>`,
       'Einstellungen', async ev => {
         const b = ev.target.closest('button'); if (!b) return;
+        if (b.dataset.tpldel) { state.templates = state.templates.filter(x => x.id !== b.dataset.tpldel); save(); b.closest('.setting').remove(); toast('Vorlage gelöscht'); return; }
         if (b.dataset.workday) {
           const d = +b.dataset.workday; s.workDays = s.workDays.includes(d) ? s.workDays.filter(x => x !== d) : [...s.workDays, d];
           b.setAttribute('aria-pressed', s.workDays.includes(d)); save(); return;
@@ -1211,7 +1684,7 @@
           const r = await Native.authenticate({ reason: 'Face ID für WDID einschalten' }).catch(() => ({ success: false }));
           if (!r.success) { ev.target.checked = false; return toast('Face ID ist nicht verfügbar'); }
         }
-        s[k] = ev.target.type === 'checkbox' ? ev.target.checked : ev.target.value;
+        s[k] = ev.target.type === 'checkbox' ? ev.target.checked : ev.target.type === 'number' ? Math.max(1, Number(ev.target.value) || 40) : ev.target.value;
         if (k === 'motion') applyLook(false);
         if (k === 'autoArea' && s.autoArea) { lastAuto = null; autoSwitchArea(); }
         if (k === 'haptics' && s.haptics) haptic('medium');
@@ -1411,9 +1884,19 @@
   app.addEventListener('click', ev => {
     const ab = ev.target.closest('button[data-area]');
     if (ab) return setArea(ab.dataset.area);
-    const el = ev.target.closest('[data-done],[data-edit],[data-goto],[data-filter],[data-pin],[data-clear],[data-copylist],[data-addlist],[data-newlist],[data-editplace],[data-suggest],[data-paper],[data-case],[data-newtype],[data-review],#copyDay,#showWork,#locate,#reset,#addPlace,#askAlways,#scan,#newCase,#openSettings');
+    const el = ev.target.closest('[data-contact],[data-dayview],[data-handover],[data-workday-edit],#stopTimer,#workToggle,#handoverDone,#newContact,#copyWeek,#copyStandup,[data-done],[data-edit],[data-goto],[data-filter],[data-pin],[data-clear],[data-copylist],[data-addlist],[data-newlist],[data-editplace],[data-suggest],[data-paper],[data-case],[data-newtype],[data-review],#copyDay,#showWork,#locate,#reset,#addPlace,#askAlways,#scan,#newCase,#openSettings');
     if (!el) return;
     const d = el.dataset;
+    if (d.contact) return openContactSheet(contactById(d.contact));
+    if (d.dayview) { dayView = d.dayview; haptic('select'); return render({ enter: true }); }
+    if (d.handover !== undefined) return openHandover();
+    if (d.workdayEdit) return openWorkDaySheet(d.workdayEdit);
+    if (el.id === 'stopTimer') { toggleTimer(null); return render(); }
+    if (el.id === 'workToggle') { if (openWorkSession()) { stopWork(); toast(`Gegangen, heute ${fmtDur(workMs(today()))}`); if (state.timer) toggleTimer(null); } else { startWork('hand'); toast('Arbeitstag gestartet'); } haptic('medium'); save(); return render(); }
+    if (el.id === 'handoverDone') { state.handover = null; save(); haptic('light'); return render(); }
+    if (el.id === 'newContact') return openContactSheet(null);
+    if (el.id === 'copyWeek') return copyText(weekReport(), 'Wochenbericht kopiert');
+    if (el.id === 'copyStandup') return copyText(standupText(), 'Standup kopiert');
     if (d.done) {
       const e = state.entries.find(x => x.id === d.done), row = el.closest('.item');
       if (!e || row?.classList.contains('completing')) return;
@@ -1480,6 +1963,7 @@
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { lockedAt = Date.now(); return; }
     autoSwitchArea();
+    pullWorkEvents().then(ch => { if (ch) save(); });
     refreshLocationStatus().then(render);
     if (Date.now() - lockedAt > 60e3) lockIfNeeded(true);
   });
@@ -1491,6 +1975,10 @@
     else if (path.startsWith('scan')) scanLetter();
     else if (path.startsWith('einkauf') || path.startsWith('orte')) goTab('orte');
     else if (path.startsWith('rueckblick')) openReview();
+    else if (path.startsWith('bereich/')) { const a = path.split('/')[1]; const k = { arbeit: 'arbeit', privat: 'privat', beides: 'alle', alle: 'alle' }[a]; if (k) setArea(k); }
+    else if (path.startsWith('uebergabe')) openHandover();
+    else if (path.startsWith('kommen')) { startWork('hand'); save(); render(); toast('Arbeitstag gestartet'); }
+    else if (path.startsWith('gehen')) { stopWork(); save(); render(); toast('Feierabend eingetragen'); }
   }
   if (AppP) {
     AppP.addListener('appUrlOpen', ({ url }) => handleUrl(url));
@@ -1498,13 +1986,16 @@
   }
   if (Notes) Notes.addListener('localNotificationActionPerformed', ({ notification }) => {
     const open = notification?.extra?.open;
+    if (notification?.extra?.area) setArea(notification.extra.area);
     if (open === 'review') openReview();
+    else if (open === 'handover') openHandover();
     else if (open) goTab(open);
   });
 
   ensureResignEntry();
   applyLook(false);
   autoSwitchArea(); applyArea();
+  if (await pullWorkEvents()) save();
   await refreshLocationStatus();
   if (native) save();
   render({ enter: true });

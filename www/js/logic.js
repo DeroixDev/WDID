@@ -161,6 +161,13 @@
     return out;
   }
 
+  // letzter Tag der laufenden Woche: Freitag, am Wochenende der Sonntag
+  function endOfWeek(day) {
+    const w = weekday(day);
+    return w >= 1 && w <= 5 ? addDays(day, 5 - w) : w === 6 ? addDays(day, 1) : day;
+  }
+  const mondayOf = day => addDays(day, -((weekday(day) + 6) % 7));
+
   /* ---------- Schnelleingabe ---------- */
   const WD = { so: 0, sonntag: 0, mo: 1, montag: 1, di: 2, dienstag: 2, mi: 3, mittwoch: 3, do: 4, donnerstag: 4, fr: 5, freitag: 5, sa: 6, samstag: 6 };
   function quickParse(input, { today, places = [] } = {}) {
@@ -169,6 +176,13 @@
     const take = re => { const m = s.match(re); if (m) s = s.replace(m[0], ' '); return m; };
 
     if (take(/\s#arbeit\b|\s(arbeit|job|büro):\s/i)) r.context = 'arbeit';
+    if (take(/\s#privat\b/i)) r.context = 'privat';
+    // Ticket-, RMA- oder Auftragsnummer: #RMA-1234, #4711-22
+    let mr = take(/\s#([A-Za-z]{0,8}[-/]?\d[\w/-]*)(?=\s)/);
+    if (mr) r.ref = mr[1].toUpperCase();
+    // Person: @Jessen
+    mr = take(/\s@([\wäöüÄÖÜß.-]{2,30})(?=\s)/);
+    if (mr) r.contact = mr[1];
 
     // Ortsliste: "bei Kaufland: Milch, Brot" oder "Kaufland: Milch, Brot"
     let m = s.match(/^\s*(?:bei|im|in der|beim)?\s*([^:]{2,30}):\s*(.+)$/i);
@@ -208,6 +222,7 @@
     m = take(/\s(?:um\s)?(\d{1,2})[:.](\d{2})(?:\s?uhr)?(?=\s)/i) || take(/\s(?:um\s)?(\d{1,2})\s?uhr\b/i) || take(/\sum\s(\d{1,2})(?=\s)/i);
     if (m) { const h = +m[1], min = m[2] ? +m[2] : 0; if (h < 24 && min < 60) { r.time = `${pad(h)}:${pad(min)}`; r.type = 'reminder'; } }
 
+    if (take(/\s(?:irgendwann\s)?diese\swoche\b/i)) { r.flex = true; r.date = endOfWeek(today); }
     if (deadline) { r.type = 'deadline'; r.time = null; }
     r.title = s.replace(/\s+/g, ' ').trim().replace(/^(am|um|an)\s/i, '');
     r.title = r.title.charAt(0).toUpperCase() + r.title.slice(1);
@@ -279,7 +294,7 @@
   }
 
   const api = { pad, iso, parse, addDays, addMonths, daysBetween, weekday, fmt, STATES, easter, holidays, holidayName, isWorkday,
-    shiftToWorkday, computeDeadline, cancelDeadline, parseDateDE, analyzeLetter, quickParse, DEPTS, DEPT_KEYS, DEPT_NAME,
+    shiftToWorkday, computeDeadline, cancelDeadline, parseDateDE, analyzeLetter, quickParse, endOfWeek, mondayOf, DEPTS, DEPT_KEYS, DEPT_NAME,
     norm, categorize, deptRank, sortItems, learnRoute, suggestions };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.WDIDLogic = api;
 })(typeof window !== 'undefined' ? window : globalThis);
