@@ -425,3 +425,23 @@ input[type="date"]::-webkit-date-and-time-value, input[type="time"]::-webkit-dat
 .app.slide-in { animation: slideIn .3s cubic-bezier(.2, .8, .2, 1) .12s both; }
 .app-ghost { z-index: 1; animation: slideOut .15s cubic-bezier(.4, 0, 1, 1) forwards; }
 .app.area-in > :not(.areas) { animation: slideIn .32s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(var(--i, 0) * 25ms); }
+
+/* Ordner in der Ablage */
+.ficon.folder { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.ficon.folder svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+.ficon.folder.star { background: color-mix(in srgb, #E0A43A 18%, transparent); color: #C98A1E; }
+.ficon.folder.media { background: var(--work-soft); color: var(--work); }
+.file-row .chev { margin-left: auto; flex: none; width: 8px; height: 8px; border-right: 1.6px solid var(--muted); border-top: 1.6px solid var(--muted); transform: rotate(45deg); margin-right: 6px; }
+.file-row .fbody { flex: 1; }
+.fbody .star { font-style: normal; color: #C98A1E; margin-right: 4px; }
+.crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; margin: 0 0 10px; font-size: 14px; }
+.crumbs button { border: 0; background: none; padding: 4px 0; color: var(--accent); font-weight: 500; font-size: 14px; }
+.crumbs span { color: var(--muted); }
+.crumbs b { font-weight: 600; }
+.crumbs .icon-btn { margin-left: auto; color: var(--muted); }
+.crumbs .icon-btn svg { width: 20px; height: 20px; fill: currentColor; stroke: none; }
+.pickbar { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 8px); z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; margin: 0 0 14px; box-shadow: 0 6px 18px -10px rgba(0,0,0,.25); }
+.pickbar > span { font-weight: 600; font-size: 14px; flex: 1 0 100%; }
+.pickbar select { flex: 1; min-width: 0; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); font: inherit; font-size: 14px; }
+.file-row .pick { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--line); background: var(--surface); transition: background-color .15s, border-color .15s; }
+.file-row.picked .pick { background: var(--accent); border-color: var(--accent); box-shadow: inset 0 0 0 4px var(--surface); }

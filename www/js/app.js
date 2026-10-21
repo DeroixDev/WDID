@@ -53,7 +53,7 @@
     theme: 'system', motion: true, haptics: true, area: 'privat', autoArea: true,
     workBriefing: true, handoverOn: true, billRound: 0 };
   const blank = () => ({ version: 2, sample: false, places: [], entries: [], cases: [], routes: {}, shop: {}, history: {}, log: [], settings: { ...DEFAULT_SETTINGS },
-    templates: [], contacts: [], work: {}, media: {}, timer: null, handover: null, files: [] });
+    templates: [], contacts: [], work: {}, media: {}, timer: null, handover: null, files: [], folders: [] });
   // Vorlage für den Start: ein typischer Reklamationsfall
   const starterTemplates = () => [{ id: uid(), name: 'RMA anlegen', entry: { type: 'task', title: 'RMA anlegen', context: 'arbeit', notes: '',
     items: ['Seriennummer notieren', 'Fehlerbild beschreiben', 'Fotos vom Gerät', 'RMA im System anlegen', 'Versandlabel erstellen', 'Kunde informiert'].map(text => ({ text, done: false })) } }];
@@ -69,7 +69,7 @@
     s.cases = (s.cases || []).map(c => ({ context: 'privat', status: 'offen', next: '', ...c }));
     if (!Array.isArray(s.templates)) s.templates = starterTemplates();
     s.contacts = (s.contacts || []).map(c => ({ company: '', phone: '', email: '', notes: '', context: 'privat', lastAt: null, ...c }));
-    s.work = s.work || {}; s.media = s.media || {}; s.files = s.files || [];
+    s.work = s.work || {}; s.media = s.media || {}; s.files = s.files || []; s.folders = s.folders || [];
     if (!['privat', 'arbeit', 'alle'].includes(s.settings.area)) s.settings.area = 'privat';
     s.version = 2;
     return s;
@@ -539,6 +539,52 @@
   const webImage = f => f.path.startsWith('data:image') || /^(jpe?g|png|gif|webp)$/.test(extOf(f));
   const fmtSize = n => n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toLocaleString('de-DE', { maximumFractionDigits: 1 })} MB`;
   const linkedEntries = f => state.entries.filter(e => (e.fileIds || []).includes(f.id));
+  /* ---------- Ordner in der Ablage ---------- */
+  const folderById = id => state.folders.find(x => x.id === id);
+  const subFolders = pid => state.folders.filter(x => (x.parentId || null) === (pid || null) && inArea(x)).sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  const folderPath = id => { const out = []; let f = folderById(id); while (f && out.length < 20) { out.unshift(f); f = folderById(f.parentId); } return out; };
+  const inFolderTree = (id, rootId) => { let f = folderById(id); while (f) { if (f.id === rootId) return true; f = folderById(f.parentId); } return false; };
+  const folderCount = id => state.files.filter(f => f.folderId && inFolderTree(f.folderId, id) && inArea(f)).length;
+  // alle Ordner als eingerückte Liste für Auswahlfelder
+  const folderOptions = (sel, skip = null, rootValue = '') => {
+    const walk = (pid, depth) => subFolders(pid).filter(x => !skip || !inFolderTree(x.id, skip)).flatMap(x => [`<option value="${x.id}" ${x.id === sel ? 'selected' : ''}>${'\u2003'.repeat(depth)}${esc(x.name)}</option>`, ...walk(x.id, depth + 1)]);
+    return `<option value="${rootValue}" ${!sel ? 'selected' : ''}>Ablage (oberste Ebene)</option>` + walk(null, 0).join('');
+  };
+  function openFolderSheet(folder, { parentId = null } = {}) {
+    const isNew = !folder, f = folder || { id: uid(), name: '', parentId, context: defaultCtx() };
+    let confirmDel = false;
+    const draw = () => {
+      const n = folderCount(f.id) + state.folders.filter(x => inFolderTree(x.id, f.id) && x.id !== f.id).length;
+      showSheet(`
+        <div class="sheet-head"><h3>${isNew ? 'Neuer Ordner' : 'Ordner'}</h3>${ctxChip(ctxOf(f))}</div>
+        <div class="field"><label for="o-fname">Name</label><input id="o-fname" value="${esc(f.name)}" placeholder="z. B. Wichtig, Versicherungen, Kunde Nord"></div>
+        <div class="field"><label for="o-fparent">Liegt in</label><select id="o-fparent">${folderOptions(f.parentId, isNew ? null : f.id)}</select></div>
+        ${!isNew ? `<p class="hint">${n ? `${n} ${n === 1 ? 'Element' : 'Elemente'} darin. Beim Löschen wandert der Inhalt eine Ebene höher, es geht nichts verloren.` : 'Leer.'}</p>` : ''}
+        <p class="hint" id="formError" hidden></p>
+        <div class="sheet-actions">${isNew ? '<button class="btn ghost" data-close>Abbrechen</button>' : `<button class="btn ghost" id="o-fdel">${confirmDel ? 'Wirklich löschen?' : 'Löschen'}</button>`}<button class="btn primary" id="o-fsave">${isNew ? 'Anlegen' : 'Fertig'}</button></div>`,
+        'Ordner', ev => {
+          const b = ev.target.closest('button'); if (!b) return;
+          f.name = (document.getElementById('o-fname').value || '').trim(); f.parentId = document.getElementById('o-fparent').value || null;
+          if (b.dataset.ctxToggle !== undefined) { f.context = ctxOf(f) === 'arbeit' ? 'privat' : 'arbeit'; haptic('select'); return draw(); }
+          if (b.id === 'o-fdel') {
+            if (!confirmDel) { confirmDel = true; return draw(); }
+            const up = f.parentId || null;
+            state.files.forEach(x => { if (x.folderId === f.id) x.folderId = up; });
+            state.folders.forEach(x => { if (x.parentId === f.id) x.parentId = up; });
+            state.folders = state.folders.filter(x => x.id !== f.id);
+            if (folderId === f.id) folderId = up;
+            save(); closeSheet(); render(); toast('Ordner gelöscht'); return;
+          }
+          if (b.id === 'o-fsave') {
+            if (!f.name) { const er = document.getElementById('formError'); er.textContent = 'Gib dem Ordner einen Namen.'; er.hidden = false; return; }
+            if (isNew) state.folders.push(f);
+            save(); haptic('success'); closeSheet(); render(); toast(isNew ? `Ordner „${f.name}“ angelegt` : 'Gespeichert');
+          }
+        });
+      if (isNew) setTimeout(() => document.getElementById('o-fname')?.focus(), 60);
+    };
+    draw();
+  }
   function pickFiles() {
     return new Promise(resolve => {
       // im DOM lassen, sonst verliert WebKit das change-Ereignis
@@ -556,7 +602,7 @@
     if (Native) {
       try {
         const { files = [] } = await Native.pickDocuments();
-        const added = files.map(x => ({ id: uid(), name: (x.name || 'Datei').replace(/\.[^.]+$/, '') || 'Datei', file: x.name || 'Datei', path: x.path, mime: x.mime || '', size: x.size || 0, addedAt: Date.now(), context: ctx, note: '' }));
+        const added = files.map(x => ({ id: uid(), name: (x.name || 'Datei').replace(/\.[^.]+$/, '') || 'Datei', file: x.name || 'Datei', path: x.path, mime: x.mime || '', size: x.size || 0, addedAt: Date.now(), context: ctx, note: '', folderId: entry ? null : folderId }));
         if (!added.length) return [];
         state.files.unshift(...added);
         if (entry) (entry.fileIds = entry.fileIds || []).push(...added.map(f => f.id));
@@ -577,7 +623,7 @@
         let path;
         if (FS) path = await writeChunked(file, `files/${Date.now()}-${uid()}-${safe}`, file.name || 'Datei');
         else path = 'data:' + (file.type || 'application/octet-stream') + ';base64,' + await blobToBase64(file);
-        const f = { id: uid(), name: (file.name || 'Datei').replace(/\.[^.]+$/, '') || 'Datei', file: file.name || 'Datei', path, mime: file.type || '', size: file.size || 0, addedAt: Date.now(), context: ctx, note: '' };
+        const f = { id: uid(), name: (file.name || 'Datei').replace(/\.[^.]+$/, '') || 'Datei', file: file.name || 'Datei', path, mime: file.type || '', size: file.size || 0, addedAt: Date.now(), context: ctx, note: '', folderId: entry ? null : folderId };
         state.files.unshift(f); added.push(f);
         if (entry) (entry.fileIds = entry.fileIds || []).push(f.id);
       } catch (err) { toast(`${file.name}: ${err.message}`); }
@@ -607,7 +653,9 @@
         ${k === 'bild' ? `<img class="file-hero" data-photo="${esc(f.path)}" data-fopen alt="">` : `<button type="button" class="file-open" data-fopen>${fileIcon(k)}<span><b>${esc(f.file || f.name)}</b><span class="sub">${fmtSize(f.size)} · Tippen zum Ansehen</span></span></button>`}
         <div class="field"><label for="d-name">Name</label><input id="d-name" value="${esc(f.name)}"></div>
         <div class="field"><label for="d-note">Notiz</label><textarea id="d-note" placeholder="Worum geht es, wo ist das Original">${esc(f.note || '')}</textarea></div>
-        <div class="dept">Verknüpft mit</div>
+        <div class="field"><label for="d-folder">Ordner</label><select id="d-folder">${folderOptions(f.folderId || null)}</select></div>
+        <label class="setting" style="cursor:pointer"><div><div class="title">Wichtig</div><div class="hint">Steht oben in der Ablage unter „Wichtig“</div></div><input type="checkbox" class="switch" id="d-star" ${f.star ? 'checked' : ''}></label>
+        <div class="dept">Verknüpft mit (optional)</div>
         ${links.length ? `<ul class="timeline">${links.map(e => `<li><span class="when">${e.date ? fmtDate(e.date) : '—'}</span><div class="body"><div class="title" data-dlinkopen="${e.id}" style="cursor:pointer">${esc(e.title)}</div><div class="desc">${TYPE[e.type].label}</div></div><button type="button" class="icon-btn small" data-dunlink="${e.id}" aria-label="Verknüpfung lösen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></li>`).join('')}</ul>` : '<p class="hint">Noch mit nichts verknüpft.</p>'}
         ${cands.length ? `<div class="field"><label for="d-link" class="sr-only">Eintrag wählen</label><select id="d-link"><option value="">Eintrag wählen …</option>${cands.map(e => `<option value="${e.id}">${esc(e.title)}${e.date ? ' · ' + fmtDate(e.date) : ''}</option>`).join('')}</select><div class="row-actions" style="margin:0"><button class="btn small" id="d-linkBtn" type="button">Verknüpfen</button></div></div>` : ''}
         <p class="hint">Abgelegt ${new Date(f.addedAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })}</p>
@@ -615,6 +663,7 @@
         'Dokument', ev => {
           const b = ev.target.closest('button, [data-fopen], [data-dlinkopen]'); if (!b) return;
           f.name = (document.getElementById('d-name').value || '').trim() || f.name; f.note = (document.getElementById('d-note').value || '').trim();
+          f.folderId = document.getElementById('d-folder').value || null; f.star = document.getElementById('d-star').checked;
           if (b.dataset.fopen !== undefined) return openFile(f);
           if (b.dataset.ctxToggle !== undefined) { f.context = ctxOf(f) === 'arbeit' ? 'privat' : 'arbeit'; save(); haptic('select'); return draw(); }
           if (b.dataset.dlinkopen) { save(); return openSheet(state.entries.find(e => e.id === b.dataset.dlinkopen)); }
@@ -942,7 +991,7 @@
     return html;
   }
 
-  let papersTab = 'ablage', fileFilter = 'alle', fileQuery = '';
+  let papersTab = 'ablage', fileFilter = 'alle', fileQuery = '', folderId = null, picking = null;
   function viewPapiere() {
     let html = header('Papierkram', 'Papiere', '<button class="btn small primary" id="scan">Brief scannen</button>');
     const segs = [['ablage', 'Ablage'], ['vorgaenge', area() === 'arbeit' ? 'Projekte' : 'Vorgänge'], ['personen', 'Personen'], ['warten', 'Wartet auf'], ['vertraege', 'Verträge'], ['dokumente', 'Dokumente']];
@@ -950,19 +999,51 @@
     const sortByDate = (a, b) => (a.date || '9999').localeCompare(b.date || '9999');
     if (papersTab === 'ablage') {
       const q = fileQuery.trim().toLowerCase();
-      // Dokumente aus der Ablage plus Fotos und Videos aus Einträgen, alles an einem Ort
-      const docs = state.files.filter(inArea).map(f => ({ f, k: kindOf(f), at: f.addedAt, links: linkedEntries(f) }));
-      const media = state.entries.filter(inArea).flatMap(e => (e.photos || []).map((p, i) => ({ media: p, e, i, k: isVideo(p) ? 'video' : 'bild', at: state.media[p]?.at || e.createdAt })));
-      let all = [...docs, ...media].sort((a, b) => b.at - a.at);
-      if (fileFilter !== 'alle') all = all.filter(x => x.k === fileFilter);
-      if (q) all = all.filter(x => (x.f ? [x.f.name, x.f.file, x.f.note, ...x.links.map(e => e.title)] : [x.e.title, x.e.ref, mediaCaption(x.media)]).join(' ').toLowerCase().includes(q));
-      html += `<div class="row-actions" style="margin:0 0 14px"><button class="btn small primary" id="addFiles">Datei ablegen</button></div>`;
-      html += `<input class="search" id="fq" type="search" placeholder="Dokumente durchsuchen" value="${esc(fileQuery)}">`;
+      if (folderId && folderId !== '__star' && folderId !== '__media' && !folderById(folderId)) folderId = null;
+      const fileRow = x => x.f
+        ? `<button class="file-row${picking?.has(x.f.id) ? ' picked' : ''}" data-file="${x.f.id}">${picking ? `<span class="pick" aria-hidden="true"></span>` : ''}${x.k === 'bild' ? `<img data-photo="${esc(x.f.path)}" alt="">` : fileIcon(x.k)}<span class="fbody"><b>${x.f.star ? '<i class="star">★</i>' : ''}${esc(x.f.name)}</b><span class="sub">${[x.where, fmtSize(x.f.size), new Date(x.at).toLocaleDateString('de-DE'), x.links.length ? `↔ ${esc(x.links[0].title)}${x.links.length > 1 ? ' +' + (x.links.length - 1) : ''}` : ''].filter(Boolean).join(' · ')}</span></span></button>`
+        : `<button class="file-row" data-emedia="${x.e.id}" data-ei="${x.i}">${x.k === 'bild' ? `<img data-photo="${esc(x.media)}" alt="">` : `<span class="ficon video">VID</span>`}<span class="fbody"><b>${esc(x.e.title)}</b><span class="sub">${esc(mediaCaption(x.media) || new Date(x.at).toLocaleDateString('de-DE'))} · aus Eintrag</span></span></button>`;
+      const docItem = f => ({ f, k: kindOf(f), at: f.addedAt, links: linkedEntries(f) });
+      const mediaItems = () => state.entries.filter(inArea).flatMap(e => (e.photos || []).map((p, i) => ({ media: p, e, i, k: isVideo(p) ? 'video' : 'bild', at: state.media[p]?.at || e.createdAt })));
+      const searching = q || fileFilter !== 'alle';
+      const folderIcon = '<span class="ficon folder"><svg viewBox="0 0 24 24"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2h9A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg></span>';
+      // Pfad oben: Ablage › Ordner › Unterordner
+      const crumbs = folderId === '__star' ? [{ id: '__star', name: 'Wichtig' }] : folderId === '__media' ? [{ id: '__media', name: 'Aus Einträgen' }] : folderPath(folderId);
+      if (picking) {
+        html += `<div class="pickbar"><span>${picking.size} ausgewählt</span><select id="moveTo" aria-label="Verschieben nach"><option value="" selected>Verschieben nach …</option>${folderOptions('__none', null, '__root')}</select><button class="btn small" id="pickStar">★</button><button class="btn small ghost" id="pickDone">Fertig</button></div>`;
+      } else {
+        html += `<div class="row-actions" style="margin:0 0 14px"><button class="btn small primary" id="addFiles">Datei ablegen</button>${folderId !== '__star' && folderId !== '__media' ? '<button class="btn small" id="newFolder">Neuer Ordner</button>' : ''}<button class="btn small ghost" id="pickStart">Auswählen</button></div>`;
+      }
+      html += `<input class="search" id="fq" type="search" placeholder="${folderId ? 'In diesem Ordner suchen' : 'Alle Dokumente durchsuchen'}" value="${esc(fileQuery)}">`;
       html += `<div class="filters">${[['alle', 'Alle'], ['pdf', 'PDFs'], ['bild', 'Bilder'], ['video', 'Videos'], ['text', 'Texte'], ['andere', 'Andere']].map(([k, l]) => `<button class="chip" data-ffilter="${k}" aria-pressed="${fileFilter === k}">${l}</button>`).join('')}</div>`;
-      if (!all.length) html += `<div class="empty">${state.files.length || q ? 'Nichts gefunden.' : 'Hier liegen alle deine Dokumente: PDFs, Scans, Bilder, Videos, auch aus der Dateien-App. Fotos aus Einträgen tauchen automatisch auf. Jedes Dokument lässt sich mit Einträgen verknüpfen.'}</div>`;
-      else html += `<div class="files">${all.slice(0, 300).map(x => x.f
-        ? `<button class="file-row" data-file="${x.f.id}">${x.k === 'bild' ? `<img data-photo="${esc(x.f.path)}" alt="">` : fileIcon(x.k)}<span class="fbody"><b>${esc(x.f.name)}</b><span class="sub">${[fmtSize(x.f.size), new Date(x.at).toLocaleDateString('de-DE'), x.links.length ? `↔ ${esc(x.links[0].title)}${x.links.length > 1 ? ' +' + (x.links.length - 1) : ''}` : ''].filter(Boolean).join(' · ')}</span></span></button>`
-        : `<button class="file-row" data-emedia="${x.e.id}" data-ei="${x.i}">${x.k === 'bild' ? `<img data-photo="${esc(x.media)}" alt="">` : `<span class="ficon video">VID</span>`}<span class="fbody"><b>${esc(x.e.title)}</b><span class="sub">${esc(mediaCaption(x.media) || new Date(x.at).toLocaleDateString('de-DE'))} · aus Eintrag</span></span></button>`).join('')}</div>`;
+      if (folderId) html += `<nav class="crumbs" aria-label="Ordnerpfad"><button data-fold="">Ablage</button>${crumbs.map((c, n) => `<span>›</span>${n === crumbs.length - 1 ? `<b>${esc(c.name)}</b>` : `<button data-fold="${c.id}">${esc(c.name)}</button>`}`).join('')}${folderById(folderId) ? `<button class="icon-btn small" data-editfolder="${folderId}" aria-label="Ordner bearbeiten"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg></button>` : ''}</nav>`;
+      let rows = '';
+      if (folderId === '__media') {
+        let all = mediaItems().sort((a, b) => b.at - a.at);
+        if (fileFilter !== 'alle') all = all.filter(x => x.k === fileFilter);
+        if (q) all = all.filter(x => [x.e.title, x.e.ref, mediaCaption(x.media)].join(' ').toLowerCase().includes(q));
+        rows = all.slice(0, 300).map(fileRow).join('');
+      } else {
+        // im Ordner (und darunter) suchen, oder ganz oben in allem
+        let pool = state.files.filter(inArea);
+        if (folderId === '__star') pool = pool.filter(f => f.star);
+        else if (searching) { if (folderId) pool = pool.filter(f => f.folderId && inFolderTree(f.folderId, folderId)); }
+        else pool = pool.filter(f => (f.folderId || null) === folderId || (f.folderId && !folderById(f.folderId) && !folderId));
+        let docs = pool.map(f => ({ ...docItem(f), where: searching && f.folderId ? folderPath(f.folderId).map(x => x.name).join(' › ') : '' }));
+        if (fileFilter !== 'alle') docs = docs.filter(x => x.k === fileFilter);
+        if (q) docs = docs.filter(x => [x.f.name, x.f.file, x.f.note, ...x.links.map(e => e.title)].join(' ').toLowerCase().includes(q));
+        docs.sort((a, b) => (b.f.star ? 1 : 0) - (a.f.star ? 1 : 0) || b.at - a.at);
+        let folders = '';
+        if (!searching && folderId !== '__star') {
+          const starN = state.files.filter(f => f.star && inArea(f)).length, mediaN = mediaItems().length;
+          const virt = !folderId ? [starN ? `<button class="file-row" data-fold="__star"><span class="ficon folder star"><svg viewBox="0 0 24 24"><path d="M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z"/></svg></span><span class="fbody"><b>Wichtig</b><span class="sub">${starN} ${starN === 1 ? 'Datei' : 'Dateien'}</span></span><span class="chev" aria-hidden="true"></span></button>` : '', mediaN ? `<button class="file-row" data-fold="__media"><span class="ficon folder media"><svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M20 16l-5-5-8 7.5"/></svg></span><span class="fbody"><b>Aus Einträgen</b><span class="sub">${mediaN} Fotos und Videos</span></span><span class="chev" aria-hidden="true"></span></button>` : ''] : [];
+          folders = virt.join('') + subFolders(folderId).map(x => { const n = folderCount(x.id), sub = state.folders.filter(y => y.parentId === x.id).length; return `<button class="file-row" data-fold="${x.id}">${folderIcon}<span class="fbody"><b>${esc(x.name)}</b><span class="sub">${[sub ? `${sub} ${sub === 1 ? 'Ordner' : 'Ordner'}` : '', `${n} ${n === 1 ? 'Datei' : 'Dateien'}`].filter(Boolean).join(' · ')}</span></span><span class="chev" aria-hidden="true"></span></button>`; }).join('');
+        }
+        if (searching && !folderId) { let m = mediaItems(); if (fileFilter !== 'alle') m = m.filter(x => x.k === fileFilter); if (q) m = m.filter(x => [x.e.title, x.e.ref, mediaCaption(x.media)].join(' ').toLowerCase().includes(q)); docs = [...docs, ...m.slice(0, 100)]; }
+        rows = folders + docs.slice(0, 300).map(fileRow).join('');
+      }
+      if (!rows) html += `<div class="empty">${searching ? 'Nichts gefunden.' : folderId ? 'Dieser Ordner ist leer. „Datei ablegen“ legt direkt hier ab.' : 'Hier liegen alle deine Dokumente: PDFs, Scans, Bilder, Texte aus der Dateien-App. Ordne sie in Ordner, markiere Wichtiges, und verknüpfe sie bei Bedarf mit Einträgen.'}</div>`;
+      else html += `<div class="files">${rows}</div>`;
     } else if (papersTab === 'vorgaenge') {
       const order = Object.keys(CASE_STATUS);
       const cases = state.cases.filter(c => !c.closed && inArea(c)).sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || b.createdAt - a.createdAt);
@@ -2175,12 +2256,19 @@
   app.addEventListener('click', ev => {
     const ab = ev.target.closest('button[data-area]');
     if (ab) return setArea(ab.dataset.area);
-    const el = ev.target.closest('[data-contact],[data-dayview],[data-handover],[data-file],[data-emedia],[data-ffilter],#addFiles,[data-billmonth],[data-billclient],#copyBilling,#stopTimer,#handoverDone,#newContact,#copyWeek,#copyStandup,[data-done],[data-edit],[data-goto],[data-filter],[data-pin],[data-clear],[data-copylist],[data-addlist],[data-newlist],[data-editplace],[data-suggest],[data-paper],[data-case],[data-newtype],[data-review],#copyDay,#showWork,#locate,#reset,#addPlace,#askAlways,#scan,#newCase,#openSettings');
+    const el = ev.target.closest('[data-fold],[data-editfolder],#newFolder,#pickStart,#pickDone,#pickStar,[data-contact],[data-dayview],[data-handover],[data-file],[data-emedia],[data-ffilter],#addFiles,[data-billmonth],[data-billclient],#copyBilling,#stopTimer,#handoverDone,#newContact,#copyWeek,#copyStandup,[data-done],[data-edit],[data-goto],[data-filter],[data-pin],[data-clear],[data-copylist],[data-addlist],[data-newlist],[data-editplace],[data-suggest],[data-paper],[data-case],[data-newtype],[data-review],#copyDay,#showWork,#locate,#reset,#addPlace,#askAlways,#scan,#newCase,#openSettings');
     if (!el) return;
     const d = el.dataset;
     if (d.contact) return openContactSheet(contactById(d.contact));
     if (d.dayview) { dayView = d.dayview; haptic('select'); return render({ enter: true }); }
     if (d.handover !== undefined) return openHandover();
+    if (d.fold !== undefined) { folderId = d.fold || null; fileQuery = ''; haptic('select'); return render({ enter: 'area', dir: d.fold ? 1 : -1 }); }
+    if (d.editfolder) return openFolderSheet(folderById(d.editfolder));
+    if (el.id === 'newFolder') return openFolderSheet(null, { parentId: folderId });
+    if (el.id === 'pickStart') { picking = new Set(); haptic('select'); return render(); }
+    if (el.id === 'pickDone') { picking = null; return render(); }
+    if (el.id === 'pickStar') { if (!picking.size) return; const all = [...picking].map(fileById).filter(Boolean), on = !all.every(f => f.star); all.forEach(f => f.star = on); save(); haptic('success'); toast(on ? 'Als wichtig markiert' : 'Markierung entfernt'); picking = null; return render(); }
+    if (d.file && picking) { picking.has(d.file) ? picking.delete(d.file) : picking.add(d.file); haptic('select'); return render(); }
     if (d.file) return openFileSheet(fileById(d.file));
     if (d.emedia) { const e = state.entries.find(x => x.id === d.emedia); return openViewer(e.photos, +d.ei); }
     if (d.ffilter) { fileFilter = d.ffilter; return render(); }
@@ -2238,6 +2326,12 @@
   let listTimer;
   app.addEventListener('change', ev => {
     const c = ev.target;
+    if (c.id === 'moveTo' && c.value) {
+      const to = c.value === '__root' ? null : c.value, n = picking?.size || 0;
+      if (!n) { c.value = ''; return toast('Erst Dateien antippen'); }
+      picking.forEach(id => { const f = fileById(id); if (f) f.folderId = to; });
+      picking = null; save(); haptic('success'); toast(`${n} ${n === 1 ? 'Datei' : 'Dateien'} verschoben nach ${to ? folderById(to).name : 'Ablage'}`); return render();
+    }
     if (c.dataset.list) {
       const list = state.entries.find(e => e.id === c.dataset.list);
       checkItem(list, +c.dataset.idx, c.checked);
