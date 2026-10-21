@@ -343,3 +343,67 @@ label.inline.hint input { margin-top: 3px; }
 .field .checklist input[type="checkbox"] { width: 22px; height: 22px; padding: 0; border-radius: 7px; }
 .field .quick .btn.icon { flex: none; }
 .field .checklist label { text-transform: none; letter-spacing: 0; font-size: 15px; color: inherit; font-weight: 400; }
+
+/* ---------- Eintrag: simple Ansicht, Rest zum Ausklappen ---------- */
+/* Felder stehen untereinander, nichts quetscht sich nebeneinander */
+.two { grid-template-columns: 1fr; gap: 16px; }
+.sheet .still { animation: none; }
+.secs { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+details.sec { border-bottom: 1px solid var(--line); }
+details.sec > summary, details.more > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 13px 2px; font-size: 15px; font-weight: 500; -webkit-tap-highlight-color: transparent; }
+details.sec > summary::-webkit-details-marker, details.more > summary::-webkit-details-marker { display: none; }
+details.sec > summary::after, details.more > summary::after { content: ""; flex: none; width: 7px; height: 7px; margin: 0 4px 3px auto; border-right: 1.6px solid var(--muted); border-bottom: 1.6px solid var(--muted); transform: rotate(45deg); transition: transform .25s var(--ease); }
+details[open].sec > summary::after, details[open].more > summary::after { transform: rotate(225deg); margin-bottom: -3px; }
+.sec-t { flex: none; }
+.sec-p { min-width: 0; flex: 1; text-align: right; color: var(--muted); font-size: 13px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sec-body { display: flex; flex-direction: column; gap: 14px; padding: 2px 0 18px; animation: rise .28s var(--ease) both; }
+.sec-body > .dept:first-child { display: none; }
+details.more { border-radius: var(--r); }
+details.more > summary { color: var(--accent); font-weight: 600; padding: 12px 2px; }
+details.more > summary .sec-p { color: var(--muted); font-weight: 400; }
+details[open].more > summary .sec-p { visibility: hidden; }
+details.more .secs { margin-top: 2px; }
+details.more > .row-actions { margin-top: 14px; }
+pre.ocr-text { white-space: pre-wrap; font-family: var(--f-mono); font-size: 12px; color: var(--muted); max-height: 220px; overflow: auto; margin: 0; }
+.sheet .row-actions > select.btn { max-width: 100%; }
+
+/* Ort und Zeiten */
+.loc-card { margin: 0; }
+.loc-card .title { font-weight: 600; }
+.loc-results { display: flex; flex-direction: column; }
+.loc-results:empty { display: none; }
+.loc-hit { text-align: left; border: 0; border-top: 1px solid var(--line); background: none; padding: 11px 2px; display: flex; flex-direction: column; gap: 2px; font-size: 15px; color: var(--fg); }
+.loc-hit:last-child { border-bottom: 1px solid var(--line); }
+.loc-hit .sub { font-size: 13px; color: var(--muted); }
+.sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.sessions li { display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 6px 8px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.sessions li:last-child { border-bottom: 1px solid var(--line); }
+.sessions input { min-width: 0; width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); font-variant-numeric: tabular-nums; }
+.sessions [data-sd] { grid-column: 1 / 4; grid-row: 1; }
+.sessions [data-sdel] { grid-column: 4; grid-row: 1; margin: 0; }
+.sessions .sub { grid-column: 4; grid-row: 2; font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+/* Ablage */
+.files { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.file-row { display: flex; align-items: center; gap: 12px; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 10px 0; color: var(--fg); width: 100%; }
+.file-row img { width: 44px; height: 44px; object-fit: cover; border-radius: 9px; flex: none; background: var(--line); }
+.fbody { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fbody b { font-weight: 500; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fbody .sub { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ficon { flex: none; width: 44px; height: 44px; border-radius: 9px; display: grid; place-items: center; font-family: var(--f-mono); font-size: 10px; font-weight: 600; letter-spacing: .04em; background: var(--accent-soft); color: var(--accent); }
+.ficon.pdf { background: var(--due-soft); color: var(--due); }
+.ficon.video { background: var(--work-soft); color: var(--work); }
+.ficon.andere { background: color-mix(in srgb, var(--fg) 7%, transparent); color: var(--muted); }
+.file-hero { width: 100%; max-height: 46vh; object-fit: contain; border-radius: var(--r); background: color-mix(in srgb, var(--fg) 5%, transparent); cursor: zoom-in; }
+.file-open { display: flex; align-items: center; gap: 14px; text-align: left; border: 1px solid var(--line); background: var(--surface); border-radius: var(--r); padding: 14px; color: var(--fg); }
+.file-open > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.file-open b { font-weight: 600; overflow-wrap: anywhere; }
+.file-open .sub { font-size: 13px; color: var(--muted); }
+.doc-list { display: flex; flex-direction: column; gap: 6px; }
+.doc-chip { display: flex; align-items: center; border: 1px solid var(--line); background: var(--surface); border-radius: 12px; overflow: hidden; }
+.doc-chip > button:first-child { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: 0; background: none; padding: 6px 8px; text-align: left; color: var(--fg); font-size: 14px; }
+.doc-chip .ficon { width: 32px; height: 32px; font-size: 9px; border-radius: 7px; }
+.doc-chip .x { flex: none; border: 0; background: none; color: var(--muted); font-size: 20px; padding: 6px 12px; }
+.grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loc-hit span { font-size: 13px; color: var(--muted); }
+.loc-hit b { font-weight: 500; }

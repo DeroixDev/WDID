@@ -5,6 +5,8 @@ import UserNotifications
 import Vision
 import LocalAuthentication
 import WebKit
+import MapKit
+import QuickLook
 
 /// Ankunftserkennung über die Regionsüberwachung von iOS.
 /// Lebt unabhängig von der Web-Oberfläche, weil iOS die App bei Ankunft im Hintergrund startet,
@@ -50,7 +52,7 @@ final class GeofenceManager: NSObject, CLLocationManagerDelegate {
             let region = CLCircularRegion(center: CLLocationCoordinate2D(latitude: lat, longitude: lng), radius: radius, identifier: prefix + id)
             region.notifyOnEntry = true
             // Orte mit Arbeitszeiterfassung melden auch das Verlassen
-            region.notifyOnExit = (entry["track"] as? Double ?? 0) > 0
+            region.notifyOnExit = (entry["stop"] as? Double ?? 0) > 0
             manager.startMonitoring(for: region)
         }
     }
@@ -79,14 +81,32 @@ final class GeofenceManager: NSObject, CLLocationManagerDelegate {
     }
 
     func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
-        guard let found = entry(for: region), (found.1["track"] as? Double ?? 0) > 0 else { return }
-        recordWork("exit", found.0)
+        guard let found = entry(for: region), (found.1["stop"] as? Double ?? 0) > 0 else { return }
+        let (id, entry) = found
+        recordWork("exit", id)
+        let now = Date().timeIntervalSince1970
+        let enteredAt = UserDefaults.standard.double(forKey: "wdid.enter." + id)
+        UserDefaults.standard.removeObject(forKey: "wdid.enter." + id)
+        guard let body = entry["exitBody"] as? String, enteredAt > 0 else { return }
+        let minutes = Int((now - enteredAt) / 60)
+        let duration = minutes < 60 ? "\(minutes) min" : "\(minutes / 60) h \(String(format: "%02d", minutes % 60)) min"
+        let content = UNMutableNotificationContent()
+        content.title = body
+        content.body = "Vor Ort: \(duration). Die Zeit steht im Eintrag."
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "wdid.exit.\(id).\(Int(now))", content: content, trigger: nil))
     }
 
     func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
         guard let found = entry(for: region) else { return }
         let (id, entry) = found
-        if (entry["track"] as? Double ?? 0) > 0 { recordWork("enter", id) }
+        if (entry["track"] as? Double ?? 0) > 0 {
+            recordWork("enter", id)
+            // Beim kurzen Rein-und-Raus die erste Ankunft behalten
+            if UserDefaults.standard.double(forKey: "wdid.enter." + id) == 0 {
+                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "wdid.enter." + id)
+            }
+        }
         guard let body = entry["body"] as? String, !body.isEmpty else { return }
 
         // Höchstens eine Mitteilung pro Ort alle zwei Stunden
@@ -119,8 +139,66 @@ public class WDIDNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "setBackground", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "detectCodes", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "makePdf", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "takeWorkEvents", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "takeWorkEvents", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "searchPlaces", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "preview", returnType: CAPPluginReturnPromise)
     ]
+
+    /// Orte über die Apple-Karten-Suche finden (braucht Internet)
+    @objc func searchPlaces(_ call: CAPPluginCall) {
+        guard let query = call.getString("query"), !query.isEmpty else {
+            call.resolve(["results": []])
+            return
+        }
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = query
+        if let lat = call.getDouble("lat"), let lng = call.getDouble("lng") {
+            request.region = MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: lat, longitude: lng), latitudinalMeters: 60000, longitudinalMeters: 60000)
+        }
+        DispatchQueue.main.async {
+            MKLocalSearch(request: request).start { response, error in
+                if let error = error as? MKError, error.code == .placemarkNotFound {
+                    call.resolve(["results": []])
+                    return
+                }
+                if let error = error {
+                    call.reject(error.localizedDescription)
+                    return
+                }
+                let results: [[String: Any]] = (response?.mapItems ?? []).prefix(8).map { item in
+                    let mark = item.placemark
+                    let street = [mark.thoroughfare, mark.subThoroughfare].compactMap { $0 }.joined(separator: " ")
+                    let city = [mark.postalCode, mark.locality].compactMap { $0 }.joined(separator: " ")
+                    let address = [street, city].filter { !$0.isEmpty }.joined(separator: ", ")
+                    return ["name": item.name ?? query, "address": address,
+                            "lat": mark.coordinate.latitude, "lng": mark.coordinate.longitude]
+                }
+                call.resolve(["results": results])
+            }
+        }
+    }
+
+    /// Dokumente mit der iOS-Vorschau öffnen (PDF, Bilder, Office, Text)
+    @objc func preview(_ call: CAPPluginCall) {
+        guard let path = call.getString("path"),
+              let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            call.reject("Datei fehlt")
+            return
+        }
+        let url = base.appendingPathComponent(path)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            call.reject("Datei nicht gefunden")
+            return
+        }
+        DispatchQueue.main.async {
+            let preview = FilePreview(url: url, title: call.getString("title"))
+            let controller = QLPreviewController()
+            controller.dataSource = preview
+            FilePreview.current = preview
+            self.bridge?.viewController?.present(controller, animated: true)
+            call.resolve()
+        }
+    }
 
     @objc func takeWorkEvents(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
@@ -343,4 +421,26 @@ final class PDFMaker: NSObject, WKNavigationDelegate {
         webView = nil
         PDFMaker.running.removeAll { $0 === self }
     }
+}
+
+/// Datenquelle für die iOS-Dateivorschau, mit lesbarem Titel statt Dateiname
+final class FilePreview: NSObject, QLPreviewControllerDataSource {
+    static var current: FilePreview?
+    private let item: Item
+
+    final class Item: NSObject, QLPreviewItem {
+        let previewItemURL: URL?
+        let previewItemTitle: String?
+        init(url: URL, title: String?) {
+            previewItemURL = url
+            previewItemTitle = title
+        }
+    }
+
+    init(url: URL, title: String?) {
+        item = Item(url: url, title: title)
+    }
+
+    func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+    func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { item }
 }

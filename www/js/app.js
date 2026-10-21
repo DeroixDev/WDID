@@ -51,15 +51,15 @@
   const DEFAULT_SETTINGS = { state: 'NW', morningOn: true, morningTime: '07:30', eveningOn: true, eveningTime: '20:30',
     lock: false, workStart: '08:00', workEnd: '17:00', workDays: [1, 2, 3, 4, 5],
     theme: 'system', motion: true, haptics: true, area: 'privat', autoArea: true,
-    workBriefing: true, handoverOn: true, weeklyHours: 40 };
+    workBriefing: true, handoverOn: true, billRound: 0 };
   const blank = () => ({ version: 2, sample: false, places: [], entries: [], cases: [], routes: {}, shop: {}, history: {}, log: [], settings: { ...DEFAULT_SETTINGS },
-    templates: [], contacts: [], work: {}, media: {}, timer: null, handover: null });
+    templates: [], contacts: [], work: {}, media: {}, timer: null, handover: null, files: [] });
   // Vorlage für den Start: ein typischer Reklamationsfall
   const starterTemplates = () => [{ id: uid(), name: 'RMA anlegen', entry: { type: 'task', title: 'RMA anlegen', context: 'arbeit', notes: '',
     items: ['Seriennummer notieren', 'Fehlerbild beschreiben', 'Fotos vom Gerät', 'RMA im System anlegen', 'Versandlabel erstellen', 'Kunde informiert'].map(text => ({ text, done: false })) } }];
   const newEntry = o => ({ id: uid(), type: 'task', title: '', notes: '', context: 'privat', date: null, time: null, received: null, source: '',
     leadDays: 3, placeId: null, group: null, items: [], repeat: 'none', caseId: null, photos: [], proof: null, contract: null,
-    ocrText: '', ref: '', contactId: null, flex: false, timeLog: [], done: false, doneAt: null, createdAt: Date.now(), ...o });
+    ocrText: '', ref: '', contactId: null, flex: false, timeLog: [], loc: null, timeAuto: null, fileIds: [], done: false, doneAt: null, createdAt: Date.now(), ...o });
 
   function migrate(s) {
     const b = blank();
@@ -69,7 +69,7 @@
     s.cases = (s.cases || []).map(c => ({ context: 'privat', status: 'offen', next: '', ...c }));
     if (!Array.isArray(s.templates)) s.templates = starterTemplates();
     s.contacts = (s.contacts || []).map(c => ({ company: '', phone: '', email: '', notes: '', context: 'privat', lastAt: null, ...c }));
-    s.work = s.work || {}; s.media = s.media || {};
+    s.work = s.work || {}; s.media = s.media || {}; s.files = s.files || [];
     if (!['privat', 'arbeit', 'alle'].includes(s.settings.area)) s.settings.area = 'privat';
     s.version = 2;
     return s;
@@ -131,39 +131,72 @@
   };
 
   /* ---------- Zeit: Stoppuhr an Einträgen und Arbeitstag ---------- */
+  function startTimer(entry, at = Date.now(), src = 'hand') {
+    if (state.timer) stopTimer(at, { quiet: true });
+    const log = entry.timeLog = entry.timeLog || [], last = log[log.length - 1];
+    // kurz raus und wieder rein (GPS-Zittern, kurze Pause): Abschnitt fortsetzen statt neu anfangen
+    if (src === 'ort' && last && last.end && at - last.end < 10 * 60e3) { log.pop(); at = last.start; }
+    state.timer = { entryId: entry.id, start: at, src };
+  }
+  function stopTimer(at = Date.now(), { quiet = false } = {}) {
+    const t = state.timer; if (!t) return 0;
+    const e = state.entries.find(x => x.id === t.entryId);
+    const end = Math.max(at, t.start);
+    if (e) (e.timeLog = e.timeLog || []).push({ start: t.start, end, src: t.src || 'hand' });
+    state.timer = null;
+    if (e && !quiet) toast(`${e.title}: ${fmtDur(end - t.start)} erfasst`);
+    return end - t.start;
+  }
   function toggleTimer(entry) {
-    const t = state.timer;
-    if (t) {
-      const running = state.entries.find(x => x.id === t.entryId);
-      if (running) (running.timeLog = running.timeLog || []).push({ start: t.start, end: Date.now() });
-      state.timer = null;
-      if (running) toast(`${running.title}: ${fmtDur(Date.now() - t.start)} erfasst`);
-      if (!entry || (running && running.id === entry.id)) { save(); return; }
-    }
-    state.timer = { entryId: entry.id, start: Date.now() };
-    // wer an etwas Arbeit misst, ist auch bei der Arbeit: Arbeitstag mitstarten
-    if (ctxOf(entry) === 'arbeit' && !openWorkSession()) startWork('hand');
+    const running = state.timer && state.timer.entryId === entry?.id;
+    if (state.timer) stopTimer();
+    if (entry && !running) startTimer(entry);
     haptic('medium'); save();
   }
-  const workDay = day => (state.work[day] = state.work[day] || []);
-  const openWorkSession = () => { for (const d of Object.keys(state.work).sort().reverse().slice(0, 3)) { const s = state.work[d].find(x => !x.end); if (s) return s; } return null; };
-  const workMs = day => (state.work[day] || []).reduce((a, x) => a + ((x.end || (day === today() ? Date.now() : x.start)) - x.start), 0);
-  function startWork(src = 'hand', at = Date.now()) {
-    if (openWorkSession()) return;
-    const day = iso(new Date(at)), list = workDay(day), last = list[list.length - 1];
-    // kurz raus und wieder rein (GPS-Zittern, Mittagspause unter 10 Minuten): Abschnitt fortsetzen
-    if (last && last.end && at - last.end < 10 * 60e3) { last.end = null; return; }
-    list.push({ start: at, end: null, src });
-  }
-  function stopWork(at = Date.now()) { const s = openWorkSession(); if (s) s.end = Math.max(at, s.start); }
-  async function pullWorkEvents() {
+  // Ankunft und Abfahrt an Orten von Einträgen: von iOS im Hintergrund gesammelt, hier abgeholt
+  async function pullTimeEvents() {
     if (!Native) return false;
     let events = [];
     try { events = (await Native.takeWorkEvents()).events || []; } catch { return false; }
-    events.sort((a, b) => a.at - b.at).forEach(ev => { if (ev.type === 'enter') startWork('ort', ev.at); else stopWork(ev.at); });
-    return events.length > 0;
+    let changed = false;
+    events.sort((a, b) => a.at - b.at).forEach(ev => {
+      if (!String(ev.id).startsWith('e:')) return;
+      const e = state.entries.find(x => x.id === ev.id.slice(2)); if (!e || !e.timeAuto) return;
+      if (ev.type === 'enter' && e.timeAuto.start && state.timer?.entryId !== e.id) { startTimer(e, ev.at, 'ort'); changed = true; }
+      if (ev.type === 'exit' && e.timeAuto.stop && state.timer?.entryId === e.id) { stopTimer(ev.at, { quiet: true }); changed = true; }
+    });
+    return changed;
   }
-  const weekWorkMs = (day = today()) => { const mo = L.mondayOf(day); let ms = 0; for (let i = 0; i < 7; i++) ms += workMs(addDays(mo, i)); return ms; };
+  // Abrechnung: Zeiten je Kunde im Monat, auf Wunsch aufgerundet
+  const roundMs = ms => { const r = (state.settings.billRound || 0) * 60e3; return r ? Math.ceil(ms / r) * r : ms; };
+  const clientOf = e => { const k = contactById(e.contactId); return k ? (k.company || k.name) : e.loc?.name || caseById(e.caseId)?.title || 'Ohne Kunde'; };
+  function billing(monthOffset = 0) {
+    const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() + monthOffset);
+    const from = new Date(d.getFullYear(), d.getMonth(), 1).getTime(), to = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
+    const clients = {};
+    for (const e of state.entries) {
+      if (!inArea(e)) continue;
+      const sessions = [...(e.timeLog || []), ...(state.timer?.entryId === e.id ? [{ start: state.timer.start, end: Date.now(), running: true }] : [])].filter(x => x.start >= from && x.start < to);
+      if (!sessions.length) continue;
+      const ms = sessions.reduce((a, x) => a + (x.end - x.start), 0);
+      const c = clients[clientOf(e)] = clients[clientOf(e)] || { name: clientOf(e), ms: 0, billed: 0, items: [] };
+      c.ms += ms; c.billed += roundMs(ms); c.items.push({ e, ms, sessions });
+    }
+    return { label: d.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' }), clients: Object.values(clients).sort((a, b) => b.ms - a.ms) };
+  }
+  function billingText(b, only) {
+    const r = state.settings.billRound;
+    const out = [`Zeiten ${b.label}${r ? ` (je Eintrag auf ${r} min aufgerundet)` : ''}`];
+    b.clients.filter(c => !only || c.name === only).forEach(c => {
+      out.push('', `${c.name}: ${fmtDur(c.billed)}${r && c.billed !== c.ms ? ` (gemessen ${fmtDur(c.ms)})` : ''}`);
+      c.items.forEach(({ e, ms, sessions }) => {
+        out.push(`- ${e.title}${e.ref ? ' (' + e.ref + ')' : ''}: ${fmtDur(roundMs(ms))}`);
+        sessions.forEach(x => out.push(`    ${new Date(x.start).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' })} ${hhmm(x.start)}–${x.running ? 'läuft' : hhmm(x.end)}`));
+      });
+    });
+    if (!b.clients.length) out.push('', 'Noch keine Zeiten erfasst.');
+    return out.join('\n');
+  }
   // Sekunden-Anzeige laufender Uhren, ohne alles neu zu zeichnen
   setInterval(() => {
     document.querySelectorAll('[data-elapsed]').forEach(el => {
@@ -321,11 +354,18 @@
   let lastRegions = '';
   function syncGeofences() {
     if (!Native) return;
-    const regions = state.places.filter(p => p.lat != null && p.kind !== 'person').map(p => {
+    let regions = state.places.filter(p => p.lat != null && p.kind !== 'person').map(p => {
       const lists = listsFor(p), open = lists.flatMap(l => l.items.filter(i => !i.done).map(i => i.text));
       return { id: p.id, placeId: p.id, lat: p.lat, lng: p.lng, radius: p.radius || 150, title: `Du bist bei ${p.name}`,
-        body: open.length ? `${open.length} offen: ${open.slice(0, 6).join(', ')}${open.length > 6 ? ' …' : ''}` : '', track: p.trackTime ? 1 : 0 };
-    }).filter(r => r.body || r.track);
+        body: open.length ? `${open.length} offen: ${open.slice(0, 6).join(', ')}${open.length > 6 ? ' …' : ''}` : '' };
+    }).filter(r => r.body);
+    // Orte von Einträgen mit automatischer Zeiterfassung zuerst: iOS überwacht höchstens 20 Regionen
+    const t = today();
+    const timed = state.entries.filter(e => e.loc?.lat != null && e.timeAuto?.start && !e.done && (!e.date || (e.date >= addDays(t, -1) && daysBetween(t, e.date) <= 7)))
+      .sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999')).slice(0, 12)
+      .map(e => ({ id: 'e:' + e.id, placeId: '', lat: e.loc.lat, lng: e.loc.lng, radius: e.loc.radius || 150, title: `Angekommen: ${e.loc.name}`,
+        body: `Zeiterfassung läuft: ${e.title}`, track: 1, stop: e.timeAuto.stop ? 1 : 0, exitBody: `Zeiterfassung beendet: ${e.title}` }));
+    regions.unshift(...timed);
     const json = JSON.stringify(regions);
     if (json === lastRegions) return;
     lastRegions = json;
@@ -469,18 +509,100 @@
   const blobToBase64 = blob => new Promise((resolve, reject) => {
     const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1] || ''); r.onerror = () => reject(r.error); r.readAsDataURL(blob);
   });
-  async function saveVideo(file) {
-    if (!FS) { const url = URL.createObjectURL(file); photoSrc[url] = url; return url; }   // Browser-Vorschau: nur bis zum Neuladen
-    const ext = ((file.name || '').match(/\.(mov|mp4|m4v)$/i)?.[1] || (/mp4/.test(file.type) ? 'mp4' : 'mov')).toLowerCase();
-    const name = `media/${Date.now()}-${uid()}.${ext}`;
+  // große Dateien stückweise schreiben, damit die Brücke zu iOS nicht überläuft
+  async function writeChunked(file, name, label) {
     const CH = 3 * 1024 * 1024;   // Vielfaches von 3, damit die Base64-Stücke sauber aneinanderpassen
+    if (!file.size) { await FS.writeFile({ path: name, data: '', directory: 'DATA', recursive: true }); return name; }
     for (let off = 0; off < file.size; off += CH) {
       const b64 = await blobToBase64(file.slice(off, off + CH));
       if (off === 0) await FS.writeFile({ path: name, data: b64, directory: 'DATA', recursive: true });
       else await FS.appendFile({ path: name, data: b64, directory: 'DATA' });
-      if (file.size > CH * 2) toast(`Video wird gespeichert … ${Math.min(100, Math.round((off + CH) / file.size * 100))} %`);
+      if (file.size > CH * 2) toast(`${label} wird gespeichert … ${Math.min(100, Math.round((off + CH) / file.size * 100))} %`);
     }
     return name;
+  }
+  async function saveVideo(file) {
+    if (!FS) { const url = URL.createObjectURL(file); photoSrc[url] = url; return url; }   // Browser-Vorschau: nur bis zum Neuladen
+    const ext = ((file.name || '').match(/\.(mov|mp4|m4v)$/i)?.[1] || (/mp4/.test(file.type) ? 'mp4' : 'mov')).toLowerCase();
+    return writeChunked(file, `media/${Date.now()}-${uid()}.${ext}`, 'Video');
+  }
+
+  /* ---------- Ablage: Dokumente aller Art ---------- */
+  const fileById = id => state.files.find(f => f.id === id);
+  const kindOf = f => /pdf/.test(f.mime) || /\.pdf$/i.test(f.name) ? 'pdf' : /^image\//.test(f.mime) ? 'bild' : /^video\//.test(f.mime) ? 'video' : 'andere';
+  const fmtSize = n => n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toLocaleString('de-DE', { maximumFractionDigits: 1 })} MB`;
+  const linkedEntries = f => state.entries.filter(e => (e.fileIds || []).includes(f.id));
+  function pickFiles() {
+    return new Promise(resolve => {
+      const input = document.createElement('input');
+      input.type = 'file'; input.multiple = true;
+      input.onchange = () => resolve([...input.files]);
+      input.click();
+    });
+  }
+  async function addFiles(files, { ctx = defaultCtx(), entry = null } = {}) {
+    const added = [];
+    for (const file of files) {
+      try {
+        const safe = (file.name || 'Datei').replace(/[^\wäöüÄÖÜß. -]+/g, '_').slice(-80);
+        let path;
+        if (FS) path = await writeChunked(file, `files/${Date.now()}-${uid()}-${safe}`, file.name || 'Datei');
+        else path = 'data:' + (file.type || 'application/octet-stream') + ';base64,' + await blobToBase64(file);
+        const f = { id: uid(), name: (file.name || 'Datei').replace(/\.[^.]+$/, '') || 'Datei', file: file.name || 'Datei', path, mime: file.type || '', size: file.size || 0, addedAt: Date.now(), context: ctx, note: '' };
+        state.files.unshift(f); added.push(f);
+        if (entry) (entry.fileIds = entry.fileIds || []).push(f.id);
+      } catch (err) { toast(`${file.name}: ${err.message}`); }
+    }
+    if (added.length) { save(); toast(added.length === 1 ? `„${added[0].name}“ abgelegt` : `${added.length} Dateien abgelegt`); haptic('success'); }
+    return added;
+  }
+  async function openFile(f) {
+    const k = kindOf(f);
+    if (k === 'bild' || k === 'video') return openViewer([f.path], 0);
+    if (Native && !f.path.startsWith('data:')) { try { await Native.preview({ path: f.path, title: f.name }); return; } catch (err) { toast(err.message); return; } }
+    const src = f.path.startsWith('data:') ? f.path : await resolvePhoto(f.path);
+    const w = window.open(); if (w) w.location.href = src; else toast('Pop-up blockiert');
+  }
+  async function shareFile(f) {
+    try { const { uri } = await FS.getUri({ path: f.path, directory: 'DATA' }); await Share.share({ title: f.name, files: [uri] }); }
+    catch (err) { if (!/cancel/i.test(err.message || '')) toast('Teilen hat nicht geklappt'); }
+  }
+  const fileIcon = k => `<span class="ficon ${k}">${{ pdf: 'PDF', bild: 'BILD', video: 'VID', andere: 'DATEI' }[k]}</span>`;
+  function openFileSheet(f) {
+    let confirmDel = false;
+    const draw = () => {
+      const k = kindOf(f), links = linkedEntries(f);
+      const cands = state.entries.filter(e => !e.done && e.type !== 'place' && inArea(e) && !(e.fileIds || []).includes(f.id)).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+      showSheet(`
+        <div class="sheet-head"><h3>Dokument</h3>${ctxChip(ctxOf(f))}</div>
+        ${k === 'bild' ? `<img class="file-hero" data-photo="${esc(f.path)}" data-fopen alt="">` : `<button type="button" class="file-open" data-fopen>${fileIcon(k)}<span><b>${esc(f.file || f.name)}</b><span class="sub">${fmtSize(f.size)} · Tippen zum Ansehen</span></span></button>`}
+        <div class="field"><label for="d-name">Name</label><input id="d-name" value="${esc(f.name)}"></div>
+        <div class="field"><label for="d-note">Notiz</label><textarea id="d-note" placeholder="Worum geht es, wo ist das Original">${esc(f.note || '')}</textarea></div>
+        <div class="dept">Verknüpft mit</div>
+        ${links.length ? `<ul class="timeline">${links.map(e => `<li><span class="when">${e.date ? fmtDate(e.date) : '—'}</span><div class="body"><div class="title" data-dlinkopen="${e.id}" style="cursor:pointer">${esc(e.title)}</div><div class="desc">${TYPE[e.type].label}</div></div><button type="button" class="icon-btn small" data-dunlink="${e.id}" aria-label="Verknüpfung lösen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></li>`).join('')}</ul>` : '<p class="hint">Noch mit nichts verknüpft.</p>'}
+        ${cands.length ? `<div class="field"><label for="d-link" class="sr-only">Eintrag wählen</label><select id="d-link"><option value="">Eintrag wählen …</option>${cands.map(e => `<option value="${e.id}">${esc(e.title)}${e.date ? ' · ' + fmtDate(e.date) : ''}</option>`).join('')}</select><div class="row-actions" style="margin:0"><button class="btn small" id="d-linkBtn" type="button">Verknüpfen</button></div></div>` : ''}
+        <p class="hint">Abgelegt ${new Date(f.addedAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })}</p>
+        <div class="sheet-actions"><button class="btn ghost" id="d-del">${confirmDel ? 'Wirklich löschen?' : 'Löschen'}</button>${Share && FS ? '<button class="btn" id="d-share">Teilen</button>' : ''}<button class="btn primary" id="d-save">Fertig</button></div>`,
+        'Dokument', ev => {
+          const b = ev.target.closest('button, [data-fopen], [data-dlinkopen]'); if (!b) return;
+          f.name = (document.getElementById('d-name').value || '').trim() || f.name; f.note = (document.getElementById('d-note').value || '').trim();
+          if (b.dataset.fopen !== undefined) return openFile(f);
+          if (b.dataset.ctxToggle !== undefined) { f.context = ctxOf(f) === 'arbeit' ? 'privat' : 'arbeit'; save(); haptic('select'); return draw(); }
+          if (b.dataset.dlinkopen) { save(); return openSheet(state.entries.find(e => e.id === b.dataset.dlinkopen)); }
+          if (b.dataset.dunlink) { const e = state.entries.find(x => x.id === b.dataset.dunlink); e.fileIds = e.fileIds.filter(x => x !== f.id); save(); return draw(); }
+          if (b.id === 'd-linkBtn') { const id = document.getElementById('d-link').value; if (!id) return; const e = state.entries.find(x => x.id === id); (e.fileIds = e.fileIds || []).push(f.id); save(); haptic('select'); toast('Verknüpft'); return draw(); }
+          if (b.id === 'd-share') return shareFile(f);
+          if (b.id === 'd-del') {
+            if (!confirmDel) { confirmDel = true; return draw(); }
+            state.files = state.files.filter(x => x.id !== f.id); state.entries.forEach(e => { if (e.fileIds) e.fileIds = e.fileIds.filter(x => x !== f.id); });
+            if (FS && !f.path.startsWith('data:')) FS.deleteFile({ path: f.path, directory: 'DATA' }).catch(() => {});
+            save(); closeSheet(); render(); toast('Gelöscht'); return;
+          }
+          if (b.id === 'd-save') { save(); closeSheet(); render(); }
+        });
+      hydratePhotos(sheetRoot);
+    };
+    draw();
   }
   function pickMedia({ camera, video }) {
     return new Promise(resolve => {
@@ -570,7 +692,9 @@
       if (e.items.length) { out.push('Liste:'); L.sortItems(e.items, routeFor(e)).forEach(({ it }) => out.push(`${it.done ? '[x]' : '[ ]'} ${it.text}`)); }
     }
     if (e.type !== 'place' && e.items?.length) { out.push('Checkliste:'); e.items.forEach(i => out.push(`${i.done ? '[x]' : '[ ]'} ${i.text}`)); }
-    if (e.timeLog?.length) out.push(`Zeitaufwand: ${fmtDur(loggedMs(e))}`);
+    if (e.fileIds?.length) out.push(`Dokumente: ${e.fileIds.map(id => fileById(id)?.name).filter(Boolean).join(', ')}`);
+    if (e.loc) out.push(`Ort: ${e.loc.name}${e.loc.address ? ', ' + e.loc.address : ''}`);
+    if (e.timeLog?.length) out.push(`Zeitaufwand: ${fmtDur(loggedMs(e))}${state.settings.billRound ? ` (abgerechnet ${fmtDur(roundMs(loggedMs(e)))})` : ''}`);
     if (e.flex) out.push('Flexibel: irgendwann bis zu diesem Tag');
     out.push(`Bereich: ${e.context === 'arbeit' ? 'Arbeit' : 'Privat'}`);
     out.push(`Status: ${e.done ? `erledigt${e.doneAt ? ' am ' + new Date(e.doneAt).toLocaleDateString('de-DE') : ''}` : 'offen'}`);
@@ -628,6 +752,8 @@
       tags.push(`<span class="tag due">seit ${fmtDate(e.date)}</span>`);
     }
     if (e.ref) tags.push(`<span class="tag plain mono">${esc(e.ref)}</span>`);
+    if (e.fileIds?.length) tags.push(`<span class="tag plain">${e.fileIds.length} Dok.</span>`);
+    if (e.loc) tags.push(`<span class="tag plain">📍 ${esc(e.loc.name)}${e.timeAuto?.start ? ' · Zeit auto' : ''}</span>`);
     const who = contactById(e.contactId); if (who) tags.push(`<button type="button" class="tag person" data-contact="${who.id}">${esc(who.name)}</button>`);
     const c = caseById(e.caseId); if (c) tags.push(`<span class="tag plain">${esc(c.title)}</span>`);
     if (e.type !== 'place' && e.items?.length) { const d = e.items.filter(i => i.done).length; tags.push(`<span class="tag ${d === e.items.length ? '' : 'plain'}">☑ ${d}/${e.items.length}</span>`); }
@@ -691,7 +817,6 @@
     if (state.sample) html += '<p class="note">Beispieldaten. Unter „Alles“ kannst du sie mit „Beispiele löschen“ entfernen.</p>';
     html += `<div class="segmented compact">${[['tag', 'Tag'], ['woche', 'Woche']].map(([k, l]) => `<button class="chip" data-dayview="${k}" aria-pressed="${dayView === k}">${l}</button>`).join('')}</div>`;
     html += timerBanner();
-    if (area() !== 'privat') html += workCard();
     if (area() !== 'privat' && state.handover && state.handover.date < t && state.handover.text) html += `<div class="card accent"><div class="card-row"><h3>Von gestern: zuerst</h3><button class="link" id="handoverDone">Erledigt</button></div><div class="desc" style="white-space:pre-wrap">${esc(state.handover.text)}</div></div>`;
     if (dayView === 'woche') return html + weekView(t);
     html += `<div class="summary">${pills.join('')}<button class="pill" id="copyDay" type="button">Tag kopieren</button></div>`;
@@ -724,13 +849,6 @@
     const e = state.entries.find(x => x.id === tm.entryId); if (!e) { state.timer = null; return ''; }
     return `<div class="banner timer"><span><b data-elapsed="${tm.start}" data-base="${loggedMs(e) - (Date.now() - tm.start)}">${fmtDur(loggedMs(e))}</b> · ${esc(e.title)}</span><button class="btn small" id="stopTimer">Stopp</button></div>`;
   }
-  function workCard() {
-    const t = today(), open = openWorkSession(), ms = workMs(t), wk = weekWorkMs(t), goal = (state.settings.weeklyHours || 40) * 36e5;
-    if (!open && !ms && area() === 'alle') return '';
-    return `<div class="card work-card"><div class="card-row"><div><div class="sub">Arbeitszeit heute</div><div class="big">${open ? `<span data-elapsed="${open.start}" data-base="${ms - (Date.now() - open.start)}">${fmtDur(ms)}</span>` : fmtDur(ms)}</div></div>
-      <button class="btn ${open ? '' : 'primary'}" id="workToggle">${open ? 'Gehen' : 'Kommen'}</button></div>
-      ${progressBar('week-work', Math.min(wk, goal), goal)}<div class="sub">Diese Woche ${fmtHours(wk)} von ${state.settings.weeklyHours || 40} h${open ? ` · seit ${hhmm(open.start)} Uhr${open.src === 'ort' ? ' (automatisch)' : ''}` : ''}</div></div>`;
-  }
   function weekView(t) {
     let html = '';
     const mine = state.entries.filter(e => inArea(e) && e.type !== 'place' && !e.done && e.date);
@@ -741,7 +859,7 @@
       const rows = mine.filter(e => e.date === day && !(e.flex && i > 0)).sort((a, b) => (a.time || '99').localeCompare(b.time || '99'));
       const label = i === 0 ? 'Heute' : i === 1 ? 'Morgen' : parse(day).toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'short' });
       const free = !L.isWorkday(day, state.settings.state);
-      html += group(label, rows.length ? rows.map(e => itemRow(e)).join('') : `<div class="empty small">${free && area() === 'arbeit' ? 'Frei' : 'Nichts geplant'}</div>`, workMs(day) ? fmtDur(workMs(day)) : '');
+      html += group(label, rows.length ? rows.map(e => itemRow(e)).join('') : `<div class="empty small">${free && area() === 'arbeit' ? 'Frei' : 'Nichts geplant'}</div>`);
     }
     const flex = mine.filter(e => e.flex && e.date > t && daysBetween(t, e.date) <= 6);
     if (flex.length) html += group('Flexibel diese Woche', flex.map(e => itemRow(e)).join(''));
@@ -795,13 +913,28 @@
     return html;
   }
 
-  let papersTab = 'vorgaenge';
+  let papersTab = 'ablage', fileFilter = 'alle', fileQuery = '';
   function viewPapiere() {
     let html = header('Papierkram', 'Papiere', '<button class="btn small primary" id="scan">Brief scannen</button>');
-    const segs = [['vorgaenge', area() === 'arbeit' ? 'Projekte' : 'Vorgänge'], ['personen', 'Personen'], ['warten', 'Wartet auf'], ['vertraege', 'Verträge'], ['dokumente', 'Dokumente']];
+    const segs = [['ablage', 'Ablage'], ['vorgaenge', area() === 'arbeit' ? 'Projekte' : 'Vorgänge'], ['personen', 'Personen'], ['warten', 'Wartet auf'], ['vertraege', 'Verträge'], ['dokumente', 'Dokumente']];
     html += `<div class="segmented">${segs.map(([k, l]) => `<button class="chip" data-paper="${k}" aria-pressed="${papersTab === k}">${l}</button>`).join('')}</div>`;
     const sortByDate = (a, b) => (a.date || '9999').localeCompare(b.date || '9999');
-    if (papersTab === 'vorgaenge') {
+    if (papersTab === 'ablage') {
+      const q = fileQuery.trim().toLowerCase();
+      // Dokumente aus der Ablage plus Fotos und Videos aus Einträgen, alles an einem Ort
+      const docs = state.files.filter(inArea).map(f => ({ f, k: kindOf(f), at: f.addedAt, links: linkedEntries(f) }));
+      const media = state.entries.filter(inArea).flatMap(e => (e.photos || []).map((p, i) => ({ media: p, e, i, k: isVideo(p) ? 'video' : 'bild', at: state.media[p]?.at || e.createdAt })));
+      let all = [...docs, ...media].sort((a, b) => b.at - a.at);
+      if (fileFilter !== 'alle') all = all.filter(x => x.k === fileFilter);
+      if (q) all = all.filter(x => (x.f ? [x.f.name, x.f.file, x.f.note, ...x.links.map(e => e.title)] : [x.e.title, x.e.ref, mediaCaption(x.media)]).join(' ').toLowerCase().includes(q));
+      html += `<div class="row-actions" style="margin:0 0 14px"><button class="btn small primary" id="addFiles">Datei ablegen</button></div>`;
+      html += `<input class="search" id="fq" type="search" placeholder="Dokumente durchsuchen" value="${esc(fileQuery)}">`;
+      html += `<div class="filters">${[['alle', 'Alle'], ['pdf', 'PDFs'], ['bild', 'Bilder'], ['video', 'Videos'], ['andere', 'Andere']].map(([k, l]) => `<button class="chip" data-ffilter="${k}" aria-pressed="${fileFilter === k}">${l}</button>`).join('')}</div>`;
+      if (!all.length) html += `<div class="empty">${state.files.length || q ? 'Nichts gefunden.' : 'Hier liegen alle deine Dokumente: PDFs, Scans, Bilder, Videos, auch aus der Dateien-App. Fotos aus Einträgen tauchen automatisch auf. Jedes Dokument lässt sich mit Einträgen verknüpfen.'}</div>`;
+      else html += `<div class="files">${all.slice(0, 300).map(x => x.f
+        ? `<button class="file-row" data-file="${x.f.id}">${x.k === 'bild' ? `<img data-photo="${esc(x.f.path)}" alt="">` : fileIcon(x.k)}<span class="fbody"><b>${esc(x.f.name)}</b><span class="sub">${[fmtSize(x.f.size), new Date(x.at).toLocaleDateString('de-DE'), x.links.length ? `↔ ${esc(x.links[0].title)}${x.links.length > 1 ? ' +' + (x.links.length - 1) : ''}` : ''].filter(Boolean).join(' · ')}</span></span></button>`
+        : `<button class="file-row" data-emedia="${x.e.id}" data-ei="${x.i}">${x.k === 'bild' ? `<img data-photo="${esc(x.media)}" alt="">` : `<span class="ficon video">VID</span>`}<span class="fbody"><b>${esc(x.e.title)}</b><span class="sub">${esc(mediaCaption(x.media) || new Date(x.at).toLocaleDateString('de-DE'))} · aus Eintrag</span></span></button>`).join('')}</div>`;
+    } else if (papersTab === 'vorgaenge') {
       const order = Object.keys(CASE_STATUS);
       const cases = state.cases.filter(c => !c.closed && inArea(c)).sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || b.createdAt - a.createdAt);
       const word = area() === 'arbeit' ? 'Projekt' : 'Vorgang';
@@ -839,7 +972,7 @@
     return html;
   }
 
-  let logQuery = '';
+  let logQuery = '', billMonth = 0;
   function viewVerlauf() {
     const t = today(), d = new Date();
     const monday = addDays(t, -((d.getDay() + 6) % 7));
@@ -852,12 +985,10 @@
       ${nextWeek.length ? `<div class="sub">${nextWeek.slice(0, 4).map(e => `${esc(e.title)} · ${fmtDate(e.date)}`).join('<br>')}</div>` : ''}
       <div class="row-actions" style="margin:0"><button class="btn small" id="copyWeek">Wochenbericht kopieren</button>${area() !== 'privat' ? '<button class="btn small" id="copyStandup">Standup kopieren</button>' : ''}</div></div>`;
     if (area() !== 'privat') {
-      const goal = (state.settings.weeklyHours || 40) * 36e5, wk = weekWorkMs(t);
-      const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
-      html += `<div class="card"><div class="card-row"><h3>Arbeitszeit</h3><span class="sub">${fmtHours(wk)} von ${state.settings.weeklyHours || 40} h</span></div>${progressBar('week-work-v', Math.min(wk, goal), goal)}
-        <ul class="timeline">${days.map(dd => { const list = state.work[dd] || []; const ms = workMs(dd);
-          return `<li data-workday-edit="${dd}" style="cursor:pointer"><span class="when">${['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][parse(dd).getDay()]} ${dd.slice(8)}.${dd.slice(5, 7)}.</span><div class="body"><div class="title">${ms ? fmtDur(ms) : '—'}</div>${list.length ? `<div class="desc">${list.map(x => `${hhmm(x.start)}–${x.end ? hhmm(x.end) : 'jetzt'}${x.src === 'ort' ? ' (Ort)' : ''}`).join(', ')}</div>` : ''}</div></li>`; }).join('')}</ul>
-        <div class="sub">${wk > goal ? `${fmtHours(wk - goal)} über Soll` : `noch ${fmtHours(goal - wk)} bis zum Soll`}. Tippe auf einen Tag zum Korrigieren.</div></div>`;
+      const bl = billing(billMonth);
+      html += `<div class="card"><div class="card-row"><h3>Zeiten zum Abrechnen</h3><div class="chips">${[[0, 'Dieser Monat'], [-1, 'Letzter']].map(([k, l]) => `<button class="chip" data-billmonth="${k}" aria-pressed="${billMonth === k}">${l}</button>`).join('')}</div></div>
+        ${bl.clients.length ? `<ul class="timeline">${bl.clients.map(c => `<li data-billclient="${esc(c.name)}" style="cursor:pointer"><span class="when">${fmtDur(c.billed)}</span><div class="body"><div class="title">${esc(c.name)}</div><div class="desc">${c.items.map(x => esc(x.e.title)).slice(0, 3).join(', ')}${c.items.length > 3 ? ' …' : ''}</div></div></li>`).join('')}</ul>
+        <div class="row-actions" style="margin:0"><button class="btn small" id="copyBilling">${esc(bl.label)} kopieren</button></div><div class="sub">Tippe auf einen Kunden, um nur seine Zeiten zu kopieren.</div>` : `<div class="sub">${esc(bl.label)}: noch nichts erfasst. Im Eintrag unter „Zeiterfassung“ startest du die Uhr oder lässt sie bei Ankunft am Ort starten.</div>`}</div>`;
     }
     html += `<input class="search" id="logq" type="search" placeholder="Wann habe ich … ? z. B. Zählerstand, Widerspruch" value="${esc(logQuery)}">`;
     const q = logQuery.trim().toLowerCase();
@@ -880,7 +1011,7 @@
       if (Object.keys(TYPE).includes(filter) && e.type !== filter) return false;
       if (filter === 'erledigt' ? !e.done : e.done) return false;
       if (!q) return true;
-      return [e.title, e.notes, e.source, e.ocrText, e.ref, contactById(e.contactId)?.name, contactById(e.contactId)?.company, caseById(e.caseId)?.title, ...(e.items || []).map(i => i.text)].join(' ').toLowerCase().includes(q);
+      return [e.title, e.notes, e.source, e.ocrText, e.ref, contactById(e.contactId)?.name, contactById(e.contactId)?.company, caseById(e.caseId)?.title, ...(e.fileIds || []).map(id => fileById(id)?.name), ...(e.items || []).map(i => i.text)].join(' ').toLowerCase().includes(q);
     }).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999') || (a.time || '').localeCompare(b.time || ''));
     const chips = [['alle', 'Alle'], ['deadline', 'Fristen'], ['reminder', 'Erinnerungen'], ['task', 'Aufgaben'], ['place', 'Ortslisten'], ['waiting', 'Wartet auf'], ['contract', 'Verträge'], ['document', 'Dokumente'], ['erledigt', 'Erledigt']]
       .map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${filter === k}">${l}</button>`).join('');
@@ -899,7 +1030,10 @@
   let sheetTimer;
   function showSheet(innerHtml, label, onClick, onChange) {
     clearTimeout(sheetTimer); sheetRoot.classList.remove('closing');
+    const prev = sheetRoot.querySelector('.sheet'), top = prev && !sheetRoot.classList.contains('closing') && prev.getAttribute('aria-label') === label ? prev.scrollTop : null;
     sheetRoot.innerHTML = `<div class="scrim" data-close></div><div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(label)}"><div class="inner"><div class="grabber"></div>${innerHtml}</div></div>`;
+    // beim Neuzeichnen desselben Sheets nicht wieder hochspringen und nicht neu einfliegen
+    if (top !== null) { const sh = sheetRoot.querySelector('.sheet'); sh.classList.add('still'); sh.scrollTop = top; }
     sheetRoot.onclick = ev => { if (ev.target.closest('[data-close]')) return closeSheet(); onClick && onClick(ev); };
     sheetRoot.onchange = onChange || null;
     sheetRoot.onkeydown = null;
@@ -921,6 +1055,7 @@
     if (isNew && e.type === 'place' && !e.placeId && !e.group) { const p = state.places.find(p => p.kind !== 'person'); if (p) e.placeId = p.id; else e.group = 'supermarkt'; }
     if (isNew && e.type === 'contract' && !e.contract) e.contract = { termEnd: L.addMonths(t, 12), noticeN: 1, noticeUnit: 'Monate', renewMonths: 1 };
     let confirmDel = false, calcResult = null;
+    const openSecs = new Set();
     const calc = e._calc || { n: 14, unit: 'Tage', fiction: false };
 
     const draw = () => {
@@ -932,21 +1067,40 @@
       const subList = e.items.length ? `<ul class="checklist">${e.items.map((it, i) => `<li class="${it.done ? 'got' : ''}"><input type="checkbox" id="sub-${i}" data-sub="${i}" ${it.done ? 'checked' : ''}><span><label for="sub-${i}">${esc(it.text)}</label></span><button type="button" class="icon-btn small" data-subdel="${i}" aria-label="Schritt entfernen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></li>`).join('')}</ul>` : '';
       const tpls = state.templates.filter(tp => area() === 'alle' || ctxOf(tp.entry) === ctxOf(e));
       const running = state.timer?.entryId === e.id;
+      const timeSection = () => {
+        const auto = e.timeAuto || {}, log = e.timeLog || [];
+        return `<div class="dept">Ort und Zeiterfassung</div>
+        ${e.loc ? `<div class="card loc-card"><div class="card-row"><div><div class="title">${esc(e.loc.name)}</div>${e.loc.address ? `<div class="sub">${esc(e.loc.address)}</div>` : ''}</div><button type="button" class="icon-btn" id="locClear" aria-label="Ort entfernen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+          <div class="row-actions" style="margin:0"><a class="btn small ghost" href="https://maps.apple.com/?ll=${e.loc.lat},${e.loc.lng}&q=${encodeURIComponent(e.loc.name)}">In Karten öffnen</a><select id="f-locradius" class="btn small">${[100, 150, 200, 300, 500].map(r => `<option value="${r}" ${(e.loc.radius || 150) === r ? 'selected' : ''}>Radius ${r} m</option>`).join('')}</select></div></div>`
+        : `<div class="field"><label for="f-locq">Ort</label><input id="f-locq" type="search" placeholder="Kunde, Adresse oder Firma suchen" enterkeyhint="search"><div class="row-actions" style="margin:0"><button class="btn small" id="locSearch" type="button">In Karten suchen</button><button class="btn small ghost" id="locHere" type="button">Mein Standort</button></div><div id="locResults" class="loc-results"></div></div>`}
+        <label class="setting" style="cursor:pointer"><div><div class="title">Bei Ankunft automatisch starten</div><div class="hint">${e.loc ? 'Braucht Standort „Immer“. Du bekommst eine Mitteilung.' : 'Erst einen Ort wählen.'}</div></div><input type="checkbox" class="switch" id="f-autostart" ${auto.start ? 'checked' : ''} ${e.loc ? '' : 'disabled'}></label>
+        <label class="setting" style="cursor:pointer"><div><div class="title">Beim Verlassen automatisch stoppen</div></div><input type="checkbox" class="switch" id="f-autostop" ${auto.stop ? 'checked' : ''} ${e.loc ? '' : 'disabled'}></label>
+        <div class="setting"><div><div class="title">${running ? `<span data-elapsed="${state.timer.start}" data-base="${loggedMs(e) - (Date.now() - state.timer.start)}">${fmtDur(loggedMs(e))}</span>` : fmtDur(loggedMs(e))}</div><div class="hint">${running ? `läuft seit ${hhmm(state.timer.start)} Uhr${state.timer.src === 'ort' ? ', bei Ankunft gestartet' : ''}` : log.length ? `${log.length} ${log.length === 1 ? 'Abschnitt' : 'Abschnitte'}` : 'Noch keine Zeit erfasst'}</div></div>
+          ${isNew ? '<span class="hint">Start nach dem Speichern</span>' : `<button class="btn ${running ? 'primary' : ''}" id="timerBtn" type="button">${running ? 'Stopp' : 'Start'}</button>`}</div>
+        ${log.length ? `<ul class="sessions">${log.map((x, i) => `<li><input type="date" data-sd="${i}" value="${iso(new Date(x.start))}"><input type="time" data-ss="${i}" value="${hhmm(x.start)}"><span>–</span><input type="time" data-se="${i}" value="${hhmm(x.end)}"><span class="sub">${fmtDur(x.end - x.start)}${x.src === 'ort' ? ' · Ort' : ''}</span><button type="button" class="icon-btn small" data-sdel="${i}" aria-label="Abschnitt löschen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></li>`).join('')}</ul>` : ''}
+        <div class="row-actions" style="margin:0"><button class="btn small ghost" id="addSession" type="button">Zeit nachtragen</button></div>`;
+      };
       const placeholder = { reminder: 'z. B. Mama zurückrufen', task: 'z. B. Fahrrad aufpumpen', deadline: 'z. B. Antwort an Versicherung', place: 'z. B. Wocheneinkauf', waiting: 'z. B. Erstattung Krankenkasse', contract: 'z. B. Handyvertrag', document: 'z. B. Personalausweis' }[e.type];
       const leadSelect = (opts, label = 'Vorher erinnern') => `<div class="field"><label for="f-lead">${label}</label><select id="f-lead">${opts.map(n => `<option value="${n}" ${n == e.leadDays ? 'selected' : ''}>${n} ${n === 1 ? 'Tag' : 'Tage'} vorher</option>`).join('')}</select></div>`;
-      let typeFields = '';
-      if (e.type === 'deadline') typeFields = `
+      let typeFields = '', repeatFields = '', calcFields = '';
+      if (e.type === 'deadline') { calcFields = `
         <div class="two"><div class="field"><label for="f-source">Woher</label><input id="f-source" value="${esc(e.source)}" placeholder="Brief, E-Mail …"></div>
         <div class="field"><label for="f-received">Eingang / Briefdatum</label><input id="f-received" type="date" value="${e.received || t}"></div></div>
         <div class="calc"><div class="row"><span class="sub">Frist berechnen:</span><input id="c-n" type="number" min="1" value="${calc.n}"><select id="c-unit">${['Tage', 'Wochen', 'Monate'].map(u => `<option ${u === calc.unit ? 'selected' : ''}>${u}</option>`).join('')}</select><button class="btn small" id="calcBtn" type="button">Berechnen</button></div>
           <label class="inline"><input type="checkbox" id="c-fiction" ${calc.fiction ? 'checked' : ''}> Behördenbrief: gilt 4 Tage nach Briefdatum als zugegangen</label>
           ${calcResult ? `<div class="result">Frist endet am ${longDate(calcResult.deadline)}</div>${calcResult.notes.length ? `<ul class="notes-list">${calcResult.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}` : `<div class="hint">Wochenenden und Feiertage in ${L.STATES[state.settings.state]} werden berücksichtigt. Ohne Gewähr.</div>`}</div>
+`;
+      typeFields = `
         <div class="two"><div class="field"><label for="f-date">Frist bis</label><input id="f-date" type="date" value="${e.date || ''}"></div>${leadSelect([1, 3, 7, 14, 30])}</div>`;
-      if (e.type === 'reminder' || e.type === 'task') typeFields = `
+      }
+      if (e.type === 'reminder' || e.type === 'task') { typeFields = `
         <div class="two"><div class="field"><label for="f-date">Tag</label><input id="f-date" type="date" value="${e.date || ''}"></div>
         <div class="field"><label for="f-time">Uhrzeit${e.type === 'task' ? ' (optional)' : ''}</label><input id="f-time" type="time" value="${e.time || ''}"></div></div>
-        <label class="inline hint"><input type="checkbox" id="f-flex" ${e.flex ? 'checked' : ''}> Flexibel: irgendwann bis zu diesem Tag (steht bis dahin unter „Diese Woche“)</label>
-        <div class="field"><label for="f-repeat">Wiederholen</label><select id="f-repeat">${[['none', 'Nie'], ['daily', 'Täglich'], ['weekly', 'Wöchentlich'], ['monthly', 'Monatlich']].map(([k, l]) => `<option value="${k}" ${e.repeat === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
+`;
+      repeatFields = `
+        <div class="field"><label for="f-repeat">Wiederholen</label><select id="f-repeat">${[['none', 'Nie'], ['daily', 'Täglich'], ['weekly', 'Wöchentlich'], ['monthly', 'Monatlich']].map(([k, l]) => `<option value="${k}" ${e.repeat === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <label class="inline hint"><input type="checkbox" id="f-flex" ${e.flex ? 'checked' : ''}> Flexibel: irgendwann bis zu diesem Tag (steht bis dahin unter „Diese Woche“)</label>`;
+      }
       if (e.type === 'waiting') typeFields = `
         <div class="field"><label for="f-source">Bei wem</label><input id="f-source" value="${esc(e.source)}" placeholder="z. B. Stadtwerke, Vermieter"></div>
         <div class="two"><div class="field"><label for="f-received">Wartet seit</label><input id="f-received" type="date" value="${e.received || t}"></div>
@@ -976,27 +1130,45 @@
         <div class="two"><div class="field"><label for="p-method">Erledigt per (Nachweis)</label><select id="p-method"><option value="">—</option>${PROOF.map(m => `<option ${e.proof?.method === m ? 'selected' : ''}>${m}</option>`).join('')}</select></div>
         <div class="field"><label for="p-note">Nachweis-Notiz</label><input id="p-note" value="${esc(e.proof?.note || '')}" placeholder="z. B. Sendungsnummer"></div></div>` : '';
 
+      // Simple Ansicht: Typ, Titel, Termin. Alles andere steckt in Abschnitten zum Ausklappen.
+      // Abschnitte mit Inhalt stehen sichtbar (zugeklappt mit Vorschau), leere liegen unter „Mehr“.
+      const sec = (key, title, filled, preview, body) => ({ key, filled, html: `<details class="sec" data-sec="${key}" ${openSecs.has(key) ? 'open' : ''}><summary><span class="sec-t">${title}</span>${preview ? `<span class="sec-p">${esc(preview)}</span>` : ''}</summary><div class="sec-body">${body}</div></details>` });
+      const files = (e.fileIds || []).map(fileById).filter(Boolean);
+      const contactName = e._contactName || contactById(e.contactId)?.name || '';
+      const log = e.timeLog || [];
+      const secs = [];
+      if (e.type === 'reminder' || e.type === 'task') secs.push(sec('repeat', 'Wiederholen und flexibel', e.repeat && e.repeat !== 'none' || e.flex, [e.flex ? 'Flexibel' : '', { daily: 'Täglich', weekly: 'Wöchentlich', monthly: 'Monatlich' }[e.repeat] || ''].filter(Boolean).join(' · '), repeatFields));
+      if (e.type === 'deadline') secs.push(sec('calc', 'Eingang und Frist berechnen', !isNew || calcResult, [e.source, e.received ? shortDate(e.received) : ''].filter(Boolean).join(' · '), calcFields));
+      if (e.type !== 'place') {
+        secs.push(sec('who', 'Nummer und Person', e.ref || e.contactId || e._contactName, [e.ref, contactName].filter(Boolean).join(' · '), `
+          <div class="field"><label for="f-ref">Nummer</label><div class="quick"><input id="f-ref" value="${esc(e.ref || '')}" placeholder="Ticket, RMA, Auftrag" autocapitalize="characters"><button class="btn small icon" id="scanRef" type="button" aria-label="Etikett scannen"><svg viewBox="0 0 24 24"><path d="M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3M8 9v6M11 9v6M14 9v6M17 9v6"/></svg></button></div><div class="chips" id="refChoices"></div></div>
+          <div class="field"><label for="f-contact">Person</label><select id="f-contact">${contactOpts}</select></div>
+          <div class="field" id="newContactField" ${e._contactName ? '' : 'hidden'}><label for="f-newcontact">Name der neuen Person</label><input id="f-newcontact" value="${esc(e._contactName || '')}" placeholder="z. B. Frau Jessen"></div>`));
+        secs.push(sec('check', 'Checkliste', e.items.length, e.items.length ? `${e.items.filter(i => i.done).length} von ${e.items.length}` : '', `${subList}<div class="quick"><input id="f-sub" placeholder="Schritt hinzufügen" enterkeyhint="done" aria-label="Schritt hinzufügen"><button class="btn small" id="addSub" type="button">Hinzufügen</button></div>`));
+      }
+      if (['reminder', 'task', 'waiting', 'deadline'].includes(e.type)) secs.push(sec('time', 'Ort und Zeiterfassung', e.loc || log.length || running, [e.loc?.name, log.length || running ? fmtDur(loggedMs(e)) : '', running ? 'läuft' : ''].filter(Boolean).join(' · '), timeSection()));
+      secs.push(sec('notes', 'Details', e.notes, (e.notes || '').split('\n')[0].slice(0, 48), `<div class="field"><label for="f-notes" class="sr-only">Details</label><textarea id="f-notes" placeholder="Aktenzeichen, Ansprechpartner, was zu tun ist …">${esc(e.notes)}</textarea></div>`));
+      if (e.type !== 'place') secs.push(sec('case', 'Vorgang', e.caseId, caseById(e.caseId)?.title || '', `<div class="field"><label for="f-case" class="sr-only">Vorgang</label><select id="f-case">${caseOpts}</select></div>
+        <div class="field" id="newCaseField" hidden><label for="f-newcase">Name des Vorgangs</label><input id="f-newcase" placeholder="z. B. Kfz-Versicherung Schaden"></div>`));
+      secs.push(sec('docs', 'Dokumente', files.length, files.length ? `${files.length} ${files.length === 1 ? 'Datei' : 'Dateien'}` : '', `${files.length ? `<div class="doc-list">${files.map(f => `<span class="doc-chip"><button type="button" data-fview="${f.id}">${fileIcon(kindOf(f))}<span class="grow">${esc(f.name)}</span></button><button type="button" class="x" data-funlink="${f.id}" aria-label="Lösen">×</button></span>`).join('')}</div>` : ''}
+          <button class="btn small" id="attachFile" type="button">Datei anhängen</button>${state.files.some(f => !(e.fileIds || []).includes(f.id)) ? `<select id="f-filepick" class="btn small" aria-label="Aus der Ablage verknüpfen"><option value="">Aus der Ablage verknüpfen …</option>${state.files.filter(f => !(e.fileIds || []).includes(f.id) && (area() === 'alle' || ctxOf(f) === ctxOf(e))).slice(0, 80).map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join('')}</select>` : ''}`));
+      secs.push(sec('media', 'Fotos und Videos', (e.photos || []).length, (e.photos || []).length ? `${e.photos.length}` : '', `${photos}<div class="row-actions" style="margin:0"><button class="btn small" id="addPhoto" type="button">Foto</button><button class="btn small" id="addVideo" type="button">Video</button><button class="btn small ghost" id="addPhotoLib" type="button">Aus der Mediathek</button></div>`));
+      if (e.type === 'deadline' || e.ocrText) secs.push(sec('ocr', e.ocrText ? 'Erkannter Text aus dem Brief' : 'Brieftext einfügen und auswerten', e.ocrText, '', e.ocrText ? `<pre class="ocr-text">${esc(e.ocrText)}</pre>` : `<div class="field"><textarea id="f-ocr" placeholder="Text aus Brief oder E-Mail hier einfügen …" aria-label="Brieftext"></textarea></div><button class="btn small" id="analyzeBtn" type="button">Auswerten</button>`));
+      if (proofFields) secs.push(sec('proof', 'Nachweis', e.proof?.method, e.proof?.method || '', proofFields));
+      const extra = `${e.type !== 'place' ? '<button class="btn small ghost" id="asTemplate" type="button">Als Vorlage speichern</button>' : ''}${e.type === 'waiting' ? '<button class="btn small ghost" id="nudgeBtn" type="button">Nachfrage kopieren</button>' : ''}`;
+      const shown = secs.filter(x => x.filled), hidden = secs.filter(x => !x.filled);
+
       showSheet(`
         <div class="sheet-head"><h3>${isNew ? 'Neuer Eintrag' : 'Bearbeiten'}</h3>${ctxChip(e.context)}</div>
         ${info ? `<p class="hint">${esc(info)}</p>` : ''}
         ${isNew && tpls.length ? `<div class="chips">${tpls.map(tp => `<button type="button" class="chip tpl" data-tpl="${tp.id}">${esc(tp.name)}</button>`).join('')}</div>` : ''}
-        ${isNew ? `<div class="quick"><input id="f-quick" placeholder="Schnell: Fr 14 Uhr Friseur · bis 15.11. Antrag · bei Kaufland: Milch, Brot" enterkeyhint="done"><button class="btn small" id="quickBtn" type="button">Übernehmen</button></div>` : ''}
+        ${isNew ? `<div class="quick"><input id="f-quick" placeholder="Schnell: Fr 14 Uhr Friseur" enterkeyhint="done" aria-label="Schnelleingabe"><button class="btn small" id="quickBtn" type="button">Übernehmen</button></div>` : ''}
         <div class="types">${Object.entries(TYPE).map(([k, v]) => `<button type="button" data-type="${k}" aria-pressed="${e.type === k}"><svg viewBox="0 0 24 24">${v.icon}</svg>${v.label}</button>`).join('')}</div>
         <div class="field"><label for="f-title">${e.type === 'place' ? 'Name der Liste' : 'Was?'}</label><input id="f-title" value="${esc(e.title)}" placeholder="${placeholder}"></div>
         ${typeFields}
-        ${e.type !== 'place' ? `<div class="two"><div class="field"><label for="f-ref">Nummer</label><div class="quick"><input id="f-ref" value="${esc(e.ref || '')}" placeholder="Ticket, RMA, Auftrag" autocapitalize="characters"><button class="btn small icon" id="scanRef" type="button" aria-label="Etikett scannen"><svg viewBox="0 0 24 24"><path d="M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3M8 9v6M11 9v6M14 9v6M17 9v6"/></svg></button></div><div class="chips" id="refChoices"></div></div>
-          <div class="field"><label for="f-contact">Person</label><select id="f-contact">${contactOpts}</select></div></div>
-          <div class="field" id="newContactField" ${e._contactName ? '' : 'hidden'}><label for="f-newcontact">Name der neuen Person</label><input id="f-newcontact" value="${esc(e._contactName || '')}" placeholder="z. B. Frau Jessen"></div>
-          <div class="field"><label>Checkliste</label>${subList}<div class="quick"><input id="f-sub" placeholder="Schritt hinzufügen" enterkeyhint="done"><button class="btn small" id="addSub" type="button">Hinzufügen</button></div></div>` : ''}
-        ${!isNew && e.type !== 'place' ? `<div class="field"><label>Zeitaufwand</label><div class="row-actions" style="margin:0;align-items:center"><button class="btn small ${running ? 'primary' : ''}" id="timerBtn" type="button">${running ? 'Stopp' : 'Start'}</button><span class="sub" ${running ? `data-elapsed="${state.timer.start}" data-base="${loggedMs(e) - (Date.now() - state.timer.start)}"` : ''}>${fmtDur(loggedMs(e))}</span>${e.timeLog?.length ? `<span class="hint">${e.timeLog.length} ${e.timeLog.length === 1 ? 'Abschnitt' : 'Abschnitte'}</span>` : ''}</div></div>` : ''}
-        <div class="field"><label for="f-notes">Details</label><textarea id="f-notes" placeholder="Aktenzeichen, Ansprechpartner, was zu tun ist …">${esc(e.notes)}</textarea></div>
-        ${e.type !== 'place' ? `<div class="field"><label for="f-case">Vorgang</label><select id="f-case">${caseOpts}</select></div>
-        <div class="field" id="newCaseField" hidden><label for="f-newcase">Name des Vorgangs</label><input id="f-newcase" placeholder="z. B. Kfz-Versicherung Schaden"></div>` : ''}
-        <div class="field"><label>Fotos und Videos</label>${photos}<div class="row-actions"><button class="btn small" id="addPhoto" type="button">Foto</button><button class="btn small" id="addVideo" type="button">Video</button><button class="btn small ghost" id="addPhotoLib" type="button">Aus der Mediathek</button></div></div>
-        ${e.type === 'deadline' || e.ocrText ? `<details class="ocr" ${e.ocrText ? '' : 'open'}><summary>${e.ocrText ? 'Erkannter Text aus dem Brief' : 'Brieftext einfügen und auswerten'}</summary>
-          ${e.ocrText ? `<pre>${esc(e.ocrText)}</pre>` : `<div class="field"><textarea id="f-ocr" placeholder="Text aus Brief oder E-Mail hier einfügen …"></textarea></div><button class="btn small" id="analyzeBtn" type="button">Auswerten</button>`}</details>` : ''}
-        ${proofFields}
-        <div class="row-actions" style="margin:0">${e.type !== 'place' ? '<button class="btn small ghost" id="asTemplate" type="button">Als Vorlage speichern</button>' : ''}${e.type === 'waiting' ? '<button class="btn small ghost" id="nudgeBtn" type="button">Nachfrage kopieren</button>' : ''}</div>
+        ${shown.length ? `<div class="secs">${shown.map(x => x.html).join('')}</div>` : ''}
+        ${hidden.length || extra ? `<details class="more" ${openSecs.has('__more') ? 'open' : ''} data-sec="__more"><summary>${shown.length ? 'Mehr' : 'Mehr Optionen'}<span class="sec-p">${hidden.map(x => x.html.match(/sec-t">([^<]+)/)[1]).join(', ')}</span></summary>
+          <div class="secs">${hidden.map(x => x.html).join('')}</div>${extra ? `<div class="row-actions">${extra}</div>` : ''}</details>` : ''}
         <p class="hint" id="formError" hidden></p>
         <div class="sheet-actions">
           ${isNew ? '<button class="btn ghost" data-close>Abbrechen</button>' : `<button class="btn ghost" id="del">${confirmDel ? 'Wirklich löschen?' : 'Löschen'}</button>`}
@@ -1004,8 +1176,11 @@
           <button class="btn primary" id="saveBtn">${isNew ? 'Speichern' : 'Fertig'}</button>
         </div>`, isNew ? 'Neuer Eintrag' : 'Eintrag bearbeiten', onClick, onChange);
       hydratePhotos(sheetRoot);
+      sheetRoot.querySelectorAll('details[data-sec]').forEach(d => { d.ontoggle = () => { d.open ? openSecs.add(d.dataset.sec) : openSecs.delete(d.dataset.sec); if (d.open) haptic('select'); }; });
       const quickInput = document.getElementById('f-quick');
       if (quickInput) quickInput.onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); applyQuick(); } };
+      const locInput = document.getElementById('f-locq');
+      if (locInput) locInput.onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); searchLoc(); } };
       const subInput = document.getElementById('f-sub');
       if (subInput) subInput.onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); addSub(); } };
       if (isNew) setTimeout(() => document.getElementById(quick ? 'f-quick' : 'f-title')?.focus(), 60);
@@ -1035,6 +1210,15 @@
       if (v('f-ref') !== undefined) e.ref = (v('f-ref') || '').trim();
       if (v('f-contact') !== undefined) { const cv = v('f-contact'); if (cv === '__new') e._contactName = (v('f-newcontact') || '').trim() || e._contactName || ''; else { e.contactId = cv || null; delete e._contactName; } }
       const fx = document.getElementById('f-flex'); if (fx) e.flex = fx.checked;
+      const as = document.getElementById('f-autostart'), ao = document.getElementById('f-autostop');
+      if (as && e.loc) e.timeAuto = { start: as.checked, stop: ao.checked };
+      const lr = document.getElementById('f-locradius'); if (lr && e.loc) e.loc.radius = Number(lr.value);
+      (e.timeLog || []).forEach((x, i) => {
+        const dd = sheetRoot.querySelector(`[data-sd="${i}"]`)?.value, ss = sheetRoot.querySelector(`[data-ss="${i}"]`)?.value, se = sheetRoot.querySelector(`[data-se="${i}"]`)?.value;
+        if (!dd || !ss || !se) return;
+        const mk = (d, tm) => { const [h, m] = tm.split(':').map(Number); const dt = parse(d); dt.setHours(h, m, 0, 0); return dt.getTime(); };
+        x.start = mk(dd, ss); x.end = mk(dd, se); if (x.end < x.start) x.end += 864e5;
+      });
       if (v('p-method') !== undefined) e.proof = v('p-method') ? { method: v('p-method'), note: (v('p-note') || '').trim(), at: e.proof?.at || Date.now() } : null;
     };
     function applyQuick() {
@@ -1058,6 +1242,32 @@
     draw();
 
     const original = entry ? [...(entry.photos || [])] : [];
+    let locResults = [];
+    function showLocResults(list, msg) {
+      locResults = list;
+      const box = document.getElementById('locResults'); if (!box) return;
+      box.innerHTML = list.length ? list.map((r, i) => `<button type="button" class="loc-hit" data-locpick="${i}"><b>${esc(r.name)}</b>${r.address ? `<span>${esc(r.address)}</span>` : ''}</button>`).join('') : `<p class="hint">${esc(msg || 'Nichts gefunden.')}</p>`;
+    }
+    const position = () => new Promise(res => {
+      if (here) return res(here);
+      if (!navigator.geolocation) return res(null);
+      navigator.geolocation.getCurrentPosition(p => { here = { lat: p.coords.latitude, lng: p.coords.longitude }; res(here); }, () => res(null), { maximumAge: 600000, timeout: 5000 });
+    });
+    async function searchLoc() {
+      const q = (document.getElementById('f-locq')?.value || '').trim(); if (!q) return;
+      if (!Native) return showLocResults([], 'Die Kartensuche gibt es in der iPhone-App. Hier kannst du „Hier“ nehmen.');
+      showLocResults([], 'Suche …');
+      const pos = await position();
+      try { const { results } = await Native.searchPlaces({ query: q, ...(pos || {}) }); showLocResults(results || [], 'Nichts gefunden. Braucht Internet.'); }
+      catch (err) { showLocResults([], 'Suche hat nicht geklappt: ' + err.message); }
+    }
+    async function locHere() {
+      const pos = await position(); if (!pos) return toast('Standort nicht verfügbar');
+      const near = state.places.find(p => p.lat != null && dist(pos, p) <= Math.max(p.radius, 150));
+      const name = (document.getElementById('f-locq')?.value || '').trim() || near?.name || 'Hier';
+      showLocResults([{ name, address: '', lat: pos.lat, lng: pos.lng }]);
+      document.querySelector('[data-locpick="0"]')?.click();
+    }
     function addSub() {
       const inp = document.getElementById('f-sub'); const text = (inp?.value || '').trim(); if (!text) return;
       read(); e.items.push({ text, done: false }); draw();
@@ -1095,7 +1305,7 @@
       if (b.closest('.viewer')) return;
       if (b.dataset.view !== undefined) {
         read();
-        return openViewer(e.photos, +b.dataset.view, { onDelete: i => { e.photos.splice(i, 1); draw(); } });
+        return openViewer([...e.photos], +b.dataset.view, { onDelete: i => { e.photos.splice(i, 1); draw(); } });
       }
       if (b.id === 'quickBtn') return applyQuick();
       if (b.dataset.tpl) {
@@ -1110,7 +1320,29 @@
       if (b.dataset.subdel !== undefined) { read(); e.items.splice(+b.dataset.subdel, 1); draw(); return; }
       if (b.dataset.refpick) { document.getElementById('f-ref').value = b.dataset.refpick; document.getElementById('refChoices').innerHTML = ''; haptic('select'); return; }
       if (b.id === 'scanRef') return scanRef();
-      if (b.id === 'timerBtn') { read(); toggleTimer(entry); Object.assign(e, { timeLog: JSON.parse(JSON.stringify(entry.timeLog || [])) }); draw(); render(); return; }
+      if (b.id === 'timerBtn') {
+        read(); Object.assign(entry, { timeLog: e.timeLog, loc: e.loc, timeAuto: e.timeAuto });
+        toggleTimer(entry); e.timeLog = JSON.parse(JSON.stringify(entry.timeLog || [])); draw(); render(); return;
+      }
+      if (b.dataset.sdel !== undefined) { read(); e.timeLog.splice(+b.dataset.sdel, 1); draw(); return; }
+      if (b.id === 'addSession') {
+        read(); const d0 = parse(e.date || t); const [h, m] = (e.time || '09:00').split(':').map(Number); d0.setHours(h, m, 0, 0);
+        (e.timeLog = e.timeLog || []).push({ start: d0.getTime(), end: d0.getTime() + 36e5, src: 'hand' }); draw(); return;
+      }
+      if (b.dataset.fview) return openFile(fileById(b.dataset.fview));
+      if (b.dataset.funlink) { read(); e.fileIds = e.fileIds.filter(x => x !== b.dataset.funlink); draw(); return; }
+      if (b.id === 'attachFile') { read(); pickFiles().then(fs => fs.length && addFiles(fs, { ctx: ctxOf(e), entry: e })).then(() => draw()); return; }
+      if (b.id === 'locSearch') return searchLoc();
+      if (b.id === 'locHere') return locHere();
+      if (b.dataset.locpick !== undefined) {
+        read(); const r = locResults[+b.dataset.locpick];
+        e.loc = { name: r.name, address: r.address || '', lat: r.lat, lng: r.lng, radius: 150 };
+        if (!e.timeAuto) e.timeAuto = { start: ctxOf(e) === 'arbeit', stop: ctxOf(e) === 'arbeit' };
+        haptic('select'); draw();
+        if (e.timeAuto.start && Native && locationStatus !== 'always') Native.requestAlwaysLocation().then(refreshLocationStatus).catch(() => {});
+        return;
+      }
+      if (b.id === 'locClear') { read(); e.loc = null; e.timeAuto = null; draw(); return; }
       if (b.id === 'asTemplate') {
         read();
         const name = e.title || TYPE[e.type].label;
@@ -1178,6 +1410,8 @@
     }
     function onChange(ev) {
       if (ev.target.dataset.sub !== undefined) { const i = +ev.target.dataset.sub; e.items[i].done = ev.target.checked; ev.target.closest('li').classList.toggle('got', ev.target.checked); if (ev.target.checked) { haptic('light'); burst(ev.target, 6); } return; }
+      if (ev.target.id === 'f-filepick' && ev.target.value) { read(); (e.fileIds = e.fileIds || []).push(ev.target.value); haptic('select'); draw(); return; }
+      if (ev.target.id === 'f-autostart' && ev.target.checked && Native && locationStatus !== 'always') Native.requestAlwaysLocation().then(refreshLocationStatus).catch(() => {});
       if (ev.target.id === 'f-contact') { const nf = document.getElementById('newContactField'); nf.hidden = ev.target.value !== '__new'; if (!nf.hidden) document.getElementById('f-newcontact').focus(); }
       if (ev.target.id === 'f-place') document.getElementById('newPlaceField').hidden = ev.target.value !== '__new';
       if (ev.target.id === 'f-case') document.getElementById('newCaseField').hidden = ev.target.value !== '__new';
@@ -1339,13 +1573,12 @@
       ${p.kind === 'store' ? `<div class="field"><label for="o-group">Gehört zu</label><select id="o-group"><option value="">Keine Gruppe</option>${Object.entries(GROUPS).map(([g, n]) => `<option value="${g}" ${p.group === g ? 'selected' : ''}>${n}</option>`).join('')}</select></div>` : ''}
       ${p.kind !== 'person' ? `<div class="field"><label for="o-radius">Radius</label><select id="o-radius">${[100, 150, 200, 300, 500].map(r => `<option value="${r}" ${p.radius == r ? 'selected' : ''}>${r} m</option>`).join('')}</select></div>
       <p class="hint">${p.lat != null ? 'Standort ist gespeichert.' : 'Den Standort speicherst du, wenn du dort bist: „Standort hier speichern“.'}</p>` : '<p class="hint">Listen für Personen erscheinen unter „Wenn du … siehst“.</p>'}
-      ${p.kind !== 'person' ? `<label class="setting" style="cursor:pointer"><div><div class="title">Arbeitszeit hier erfassen</div><div class="hint">Kommen und Gehen automatisch, wenn der Standort gespeichert ist (Standort „Immer“)</div></div><input type="checkbox" class="switch" id="o-track" ${p.trackTime ? 'checked' : ''}></label>` : ''}
       <div class="field"><label>Zeigen in</label><div class="seg">${[['beide', 'Beiden Bereichen'], ['privat', 'Privat'], ['arbeit', 'Arbeit']].map(([k, l]) => `<button type="button" data-parea="${k}" aria-pressed="${(p.area || 'beide') === k}">${l}</button>`).join('')}</div></div>
       <p class="hint" id="formError" hidden></p>
       <div class="sheet-actions">${isNew ? '<button class="btn ghost" data-close>Abbrechen</button>' : `<button class="btn ghost" id="delPlace">${confirmDel ? 'Wirklich löschen?' : 'Löschen'}</button>`}<button class="btn primary" id="savePlace">Speichern</button></div>`,
       'Ort', ev => {
         const b = ev.target.closest('button'); if (!b) return;
-        const read = () => { p.name = (document.getElementById('o-name').value || '').trim(); const g = document.getElementById('o-group'); p.group = g ? (g.value || null) : null; const r = document.getElementById('o-radius'); if (r) p.radius = Number(r.value); const tr = document.getElementById('o-track'); if (tr) { p.trackTime = tr.checked; if (tr.checked && p.area === 'beide') p.area = 'arbeit'; } };
+        const read = () => { p.name = (document.getElementById('o-name').value || '').trim(); const g = document.getElementById('o-group'); p.group = g ? (g.value || null) : null; const r = document.getElementById('o-radius'); if (r) p.radius = Number(r.value); };
         if (b.dataset.kind) { read(); p.kind = b.dataset.kind; if (p.kind !== 'store') p.group = null; draw(); }
         if (b.dataset.parea) { read(); p.area = b.dataset.parea; draw(); }
         if (b.id === 'delPlace') {
@@ -1358,7 +1591,6 @@
           read();
           if (!p.name) { const err = document.getElementById('formError'); err.hidden = false; err.textContent = 'Gib dem Ort einen Namen.'; return; }
           if (isNew) state.places.push(p); else Object.assign(state.places.find(x => x.id === p.id), p);
-          if (p.trackTime && Native && locationStatus !== 'always') Native.requestAlwaysLocation().then(refreshLocationStatus).catch(() => {});
           save(); closeSheet(); render();
         }
       });
@@ -1419,7 +1651,6 @@
   function weekReport() {
     const t = today(), mo = L.mondayOf(t), su = addDays(mo, 6);
     const out = [`Wochenbericht KW ${weekNo(t)} (${shortDate(mo).slice(0, 6)} bis ${shortDate(su)})${area() !== 'alle' ? ' – ' + AREAS[area()] : ''}`];
-    if (area() !== 'privat') { const wk = weekWorkMs(t); out.push(`Arbeitszeit: ${fmtDur(wk)} (Soll ${state.settings.weeklyHours || 40} h)`); }
     const logs = state.log.filter(l => logInArea(l) && iso(new Date(l.at)) >= mo && iso(new Date(l.at)) <= su).reverse();
     out.push('', `Erledigt (${logs.length}):`);
     let last = null;
@@ -1549,32 +1780,6 @@
     draw();
   }
 
-  /* ---------- Arbeitszeit eines Tages korrigieren ---------- */
-  function openWorkDaySheet(day) {
-    const list = JSON.parse(JSON.stringify(state.work[day] || []));
-    const t2 = ts => ts ? hhmm(ts) : '';
-    const toTs = v => { if (!v) return null; const [h, m] = v.split(':').map(Number); const d = parse(day); d.setHours(h, m, 0, 0); return d.getTime(); };
-    const draw = () => showSheet(`
-      <h3>Arbeitszeit ${longDate(day)}</h3>
-      ${list.length ? list.map((x, i) => `<div class="setting"><div class="row-actions" style="margin:0"><input type="time" data-ws="${i}" value="${t2(x.start)}"><span>bis</span><input type="time" data-we="${i}" value="${t2(x.end)}"></div><button class="icon-btn" data-wdel="${i}" aria-label="Abschnitt löschen"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`).join('') : '<p class="hint">Noch nichts erfasst.</p>'}
-      <div class="row-actions"><button class="btn small" id="wAdd">Abschnitt hinzufügen</button></div>
-      <p class="hint">Leeres Ende heißt: läuft noch.</p>
-      <div class="sheet-actions"><button class="btn ghost" data-close>Abbrechen</button><button class="btn primary" id="wSave">Speichern</button></div>`,
-      'Arbeitszeit', ev => {
-        const b = ev.target.closest('button'); if (!b) return;
-        readW();
-        if (b.dataset.wdel !== undefined) { list.splice(+b.dataset.wdel, 1); return draw(); }
-        if (b.id === 'wAdd') { const st = toTs(state.settings.workStart), en = toTs(state.settings.workEnd); list.push({ start: st, end: en, src: 'hand' }); return draw(); }
-        if (b.id === 'wSave') {
-          state.work[day] = list.filter(x => x.start).map(x => ({ ...x, end: x.end && x.end < x.start ? x.end + 864e5 : x.end })).sort((a, b) => a.start - b.start);
-          if (!state.work[day].length) delete state.work[day];
-          save(); closeSheet(); render(); toast('Arbeitszeit gespeichert');
-        }
-      });
-    const readW = () => list.forEach((x, i) => { const s1 = sheetRoot.querySelector(`[data-ws="${i}"]`), e1 = sheetRoot.querySelector(`[data-we="${i}"]`); if (s1) x.start = toTs(s1.value); if (e1) x.end = toTs(e1.value); });
-    draw();
-  }
-
   /* ---------- Feierabend-Übergabe ---------- */
   function openHandover() {
     const t = today(), m = dayModel(t, { ctx: 'arbeit' });
@@ -1587,14 +1792,13 @@
       ${open.length ? `<div class="dept">Noch offen</div><div class="chips">${open.slice(0, 12).map(e => `<button type="button" class="chip add" data-hpick="${esc(e.title)}">${esc(e.title)}</button>`).join('')}</div>` : '<p class="hint">Alles erledigt für heute.</p>'}
       ${waiting.length ? `<p class="hint">Wartet auf: ${waiting.map(e => esc(e.title)).join(', ')}</p>` : ''}
       <div class="field"><label for="h-text">Morgen zuerst</label><textarea id="h-text" placeholder="1. …">${esc(prev)}</textarea></div>
-      <div class="sheet-actions"><button class="btn ghost" data-close>Später</button><button class="btn primary" id="hSave">Speichern${openWorkSession() ? ' und gehen' : ''}</button></div>`,
+      <div class="sheet-actions"><button class="btn ghost" data-close>Später</button><button class="btn primary" id="hSave">Speichern</button></div>`,
       'Feierabend-Übergabe', ev => {
         const b = ev.target.closest('button'); if (!b) return;
         const ta = document.getElementById('h-text');
         if (b.dataset.hpick) { ta.value = (ta.value.trim() ? ta.value.trim() + '\n' : '') + '- ' + b.dataset.hpick; b.remove(); return; }
         if (b.id === 'hSave') {
           state.handover = { text: ta.value.trim(), date: t };
-          if (openWorkSession()) stopWork();
           if (state.settings.autoArea || area() === 'arbeit') { state.settings.area = 'privat'; applyArea(); }
           save(); closeSheet(); render({ enter: true });
           if (dayOpenCountCtx('arbeit') === 0) confetti();
@@ -1648,7 +1852,7 @@
       <div class="dept">Arbeit</div>
       <div class="setting"><div><div class="title">Arbeits-Briefing</div><div class="hint">Zu Arbeitsbeginn eine Mitteilung nur mit der Arbeit. Das Morgen-Briefing zeigt dann nur Privates.</div></div>${sw('s-workBriefing', s.workBriefing)}</div>
       <div class="setting"><div><div class="title">Feierabend-Übergabe</div><div class="hint">Zum Arbeitsende kurz notieren, was morgen zuerst dran ist</div></div>${sw('s-handoverOn', s.handoverOn)}</div>
-      <div class="setting"><div><div class="title">Soll pro Woche</div><div class="hint">Für Arbeitszeit und Überstunden</div></div><div class="row-actions" style="margin:0;align-items:center"><input type="number" id="s-weeklyHours" min="1" max="80" step="0.5" value="${s.weeklyHours}" style="width:72px"><span class="sub">h</span></div></div>
+      <div class="setting"><div><div class="title">Abrechnen in Schritten</div><div class="hint">Zeit je Eintrag aufrunden</div></div><select id="s-billRound">${[[0, 'genau'], [5, '5 min'], [6, '6 min'], [10, '10 min'], [15, '15 min'], [30, '30 min'], [60, '1 h']].map(([v, l]) => `<option value="${v}" ${+s.billRound === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="setting"><div><div class="title">Bereich automatisch wechseln</div><div class="hint">In der Arbeitszeit Arbeit, danach Privat. Von Hand umschalten geht immer.</div></div>${sw('s-autoArea', s.autoArea)}</div>
       <div class="setting"><div><div class="title">Arbeitszeit</div><div class="chips" style="margin-top:6px">${[1, 2, 3, 4, 5, 6, 0].map(d => `<button type="button" class="chip" data-workday="${d}" aria-pressed="${s.workDays.includes(d)}">${['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][d]}</button>`).join('')}</div></div><div class="row-actions" style="margin:0"><input type="time" id="s-workStart" value="${s.workStart}"><input type="time" id="s-workEnd" value="${s.workEnd}"></div></div>
       ${native ? `<div class="setting"><div><div class="title">Mit Face ID sperren</div><div class="hint">Beim Öffnen der App</div></div>${sw('s-lock', s.lock)}</div>` : ''}
@@ -1661,7 +1865,7 @@
       <div class="dept">Kurzbefehl für den Action-Button</div>
       <p class="hint">Kurzbefehle-App → neuer Kurzbefehl → „URL öffnen“ mit <b>wdid://neu</b> (neuer Eintrag mit Schnelleingabe) oder <b>wdid://scan</b> (Brief scannen). Dann unter Einstellungen → Action-Button → Kurzbefehl auswählen. Diktieren geht mit dem Mikrofon der Tastatur, auch offline.</p>
       <div class="dept">Mit dem iOS-Fokus koppeln</div>
-      <p class="hint">Kurzbefehle-App → Automation → Fokus „Arbeit“ → „Wenn aktiviert“ → Aktion „URL öffnen“ mit <b>wdid://bereich/arbeit</b>. Eine zweite Automation „Wenn deaktiviert“ mit <b>wdid://bereich/privat</b>. Außerdem gibt es <b>wdid://kommen</b>, <b>wdid://gehen</b> und <b>wdid://uebergabe</b>.</p>
+      <p class="hint">Kurzbefehle-App → Automation → Fokus „Arbeit“ → „Wenn aktiviert“ → Aktion „URL öffnen“ mit <b>wdid://bereich/arbeit</b>. Eine zweite Automation „Wenn deaktiviert“ mit <b>wdid://bereich/privat</b>. Außerdem öffnet <b>wdid://uebergabe</b> die Feierabend-Übergabe.</p>
       <div class="sheet-actions"><button class="btn primary" data-close>Fertig</button></div>`,
       'Einstellungen', async ev => {
         const b = ev.target.closest('button'); if (!b) return;
@@ -1684,7 +1888,7 @@
           const r = await Native.authenticate({ reason: 'Face ID für WDID einschalten' }).catch(() => ({ success: false }));
           if (!r.success) { ev.target.checked = false; return toast('Face ID ist nicht verfügbar'); }
         }
-        s[k] = ev.target.type === 'checkbox' ? ev.target.checked : ev.target.type === 'number' ? Math.max(1, Number(ev.target.value) || 40) : ev.target.value;
+        s[k] = ev.target.type === 'checkbox' ? ev.target.checked : k === 'billRound' ? Number(ev.target.value) : ev.target.value;
         if (k === 'motion') applyLook(false);
         if (k === 'autoArea' && s.autoArea) { lastAuto = null; autoSwitchArea(); }
         if (k === 'haptics' && s.haptics) haptic('medium');
@@ -1704,7 +1908,9 @@
       const photos = {};
       // Videos bleiben draußen, sonst wird das Backup riesig
       for (const p of new Set(state.entries.flatMap(e => e.photos || []).filter(p => !isVideo(p)))) { try { photos[p] = await readPhotoBase64(p); } catch {} }
-      const payload = JSON.stringify({ app: 'WDID', version: 2, createdAt: new Date().toISOString(), state, photos });
+      const files = {};
+      for (const f of state.files) if (!f.path.startsWith('data:') && kindOf(f) !== 'video') { try { files[f.path] = await readPhotoBase64(f.path); } catch {} }
+      const payload = JSON.stringify({ app: 'WDID', version: 2, createdAt: new Date().toISOString(), state, photos, files });
       let file;
       if (pass) {
         const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
@@ -1742,6 +1948,7 @@
         document.getElementById('confirmImport').onclick = async () => {
           const map = {};
           for (const [p, data] of Object.entries(backup.photos || {})) { try { map[p] = await savePhoto(data); } catch {} }
+          if (FS) for (const [p, data] of Object.entries(backup.files || {})) { try { await FS.writeFile({ path: p, data, directory: 'DATA', recursive: true }); } catch {} }
           state = migrate(backup.state);
           state.entries.forEach(e => { e.photos = (e.photos || []).map(p => map[p] || p); });
           ensureResignEntry(); save(); applyLook(true); closeSheet(); render(); toast('Backup eingespielt');
@@ -1873,6 +2080,7 @@
       enterTimer = setTimeout(() => app.classList.remove('enter'), 900);
     } else app.classList.remove('enter');
     settleProgress();
+    if (app.querySelector('[data-photo]')) hydratePhotos(app);
     const sw = app.querySelector('.areas');
     if (sw) requestAnimationFrame(() => { sw.style.setProperty('--pos', sw.dataset.pos); areaMemo = +sw.dataset.pos; });
   }
@@ -1884,15 +2092,20 @@
   app.addEventListener('click', ev => {
     const ab = ev.target.closest('button[data-area]');
     if (ab) return setArea(ab.dataset.area);
-    const el = ev.target.closest('[data-contact],[data-dayview],[data-handover],[data-workday-edit],#stopTimer,#workToggle,#handoverDone,#newContact,#copyWeek,#copyStandup,[data-done],[data-edit],[data-goto],[data-filter],[data-pin],[data-clear],[data-copylist],[data-addlist],[data-newlist],[data-editplace],[data-suggest],[data-paper],[data-case],[data-newtype],[data-review],#copyDay,#showWork,#locate,#reset,#addPlace,#askAlways,#scan,#newCase,#openSettings');
+    const el = ev.target.closest('[data-contact],[data-dayview],[data-handover],[data-file],[data-emedia],[data-ffilter],#addFiles,[data-billmonth],[data-billclient],#copyBilling,#stopTimer,#handoverDone,#newContact,#copyWeek,#copyStandup,[data-done],[data-edit],[data-goto],[data-filter],[data-pin],[data-clear],[data-copylist],[data-addlist],[data-newlist],[data-editplace],[data-suggest],[data-paper],[data-case],[data-newtype],[data-review],#copyDay,#showWork,#locate,#reset,#addPlace,#askAlways,#scan,#newCase,#openSettings');
     if (!el) return;
     const d = el.dataset;
     if (d.contact) return openContactSheet(contactById(d.contact));
     if (d.dayview) { dayView = d.dayview; haptic('select'); return render({ enter: true }); }
     if (d.handover !== undefined) return openHandover();
-    if (d.workdayEdit) return openWorkDaySheet(d.workdayEdit);
-    if (el.id === 'stopTimer') { toggleTimer(null); return render(); }
-    if (el.id === 'workToggle') { if (openWorkSession()) { stopWork(); toast(`Gegangen, heute ${fmtDur(workMs(today()))}`); if (state.timer) toggleTimer(null); } else { startWork('hand'); toast('Arbeitstag gestartet'); } haptic('medium'); save(); return render(); }
+    if (d.file) return openFileSheet(fileById(d.file));
+    if (d.emedia) { const e = state.entries.find(x => x.id === d.emedia); return openViewer(e.photos, +d.ei); }
+    if (d.ffilter) { fileFilter = d.ffilter; return render(); }
+    if (el.id === 'addFiles') { pickFiles().then(fs => fs.length && addFiles(fs).then(() => render())); return; }
+    if (d.billmonth !== undefined) { billMonth = +d.billmonth; return render(); }
+    if (d.billclient) return copyText(billingText(billing(billMonth), d.billclient), `Zeiten für ${d.billclient} kopiert`);
+    if (el.id === 'copyBilling') return copyText(billingText(billing(billMonth)), 'Zeiten kopiert');
+    if (el.id === 'stopTimer') { stopTimer(); haptic('medium'); save(); return render(); }
     if (el.id === 'handoverDone') { state.handover = null; save(); haptic('light'); return render(); }
     if (el.id === 'newContact') return openContactSheet(null);
     if (el.id === 'copyWeek') return copyText(weekReport(), 'Wochenbericht kopiert');
@@ -1959,11 +2172,12 @@
     const keep = id => { const pos = ev.target.selectionStart; render(); const q = document.getElementById(id); q.focus(); q.setSelectionRange(pos, pos); };
     if (ev.target.id === 'q') { query = ev.target.value; keep('q'); }
     if (ev.target.id === 'logq') { logQuery = ev.target.value; keep('logq'); }
+    if (ev.target.id === 'fq') { fileQuery = ev.target.value; keep('fq'); }
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { lockedAt = Date.now(); return; }
     autoSwitchArea();
-    pullWorkEvents().then(ch => { if (ch) save(); });
+    pullTimeEvents().then(ch => { if (ch) { save(); render(); } });
     refreshLocationStatus().then(render);
     if (Date.now() - lockedAt > 60e3) lockIfNeeded(true);
   });
@@ -1977,8 +2191,6 @@
     else if (path.startsWith('rueckblick')) openReview();
     else if (path.startsWith('bereich/')) { const a = path.split('/')[1]; const k = { arbeit: 'arbeit', privat: 'privat', beides: 'alle', alle: 'alle' }[a]; if (k) setArea(k); }
     else if (path.startsWith('uebergabe')) openHandover();
-    else if (path.startsWith('kommen')) { startWork('hand'); save(); render(); toast('Arbeitstag gestartet'); }
-    else if (path.startsWith('gehen')) { stopWork(); save(); render(); toast('Feierabend eingetragen'); }
   }
   if (AppP) {
     AppP.addListener('appUrlOpen', ({ url }) => handleUrl(url));
@@ -1995,7 +2207,7 @@
   ensureResignEntry();
   applyLook(false);
   autoSwitchArea(); applyArea();
-  if (await pullWorkEvents()) save();
+  if (await pullTimeEvents()) save();
   await refreshLocationStatus();
   if (native) save();
   render({ enter: true });
